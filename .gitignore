@@ -1,0 +1,8 @@
+# Root-level ignores (covers everything not already handled per-folder)
+node_modules
+dist
+.env
+.env.local
+serviceAccountKey.json
+*.log
+.DS_Store

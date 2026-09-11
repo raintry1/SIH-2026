@@ -1,0 +1,20 @@
+{
+  "name": "sih-2026",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SIH 2026 Gmail client - monorepo root (for Render backend deployment)",
+  "type": "module",
+  "scripts": {
+    "start": "node api/src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "firebase-admin": "^12.6.0",
+    "googleapis": "^144.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
