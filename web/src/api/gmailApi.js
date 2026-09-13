@@ -28,4 +28,9 @@ export async function fetchEmailDetail(id) {
   return data
 }
 
+export async function checkEmailLinks(emailId) {
+  const { data } = await api.post('/api/security/check', { emailId })
+  return data
+}
+
 export default api

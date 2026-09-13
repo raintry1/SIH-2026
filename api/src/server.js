@@ -5,6 +5,7 @@ dotenv.config()
 
 import admin from './firebase.js'
 import gmailRouter from './routes/gmail.js'
+import securityRouter from './routes/security.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -36,6 +37,9 @@ app.get('/health', (req, res) => {
 
 // Gmail API routes
 app.use('/api', gmailRouter)
+
+// Security / phishing check routes
+app.use('/api/security', securityRouter)
 
 // 404 handler
 app.use((req, res) => {
