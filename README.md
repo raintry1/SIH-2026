@@ -9,6 +9,7 @@ Built for **Smart India Hackathon 2026**.
 - **Authentication**: Firebase Auth (Google Sign-In) + Google Identity Services
 - **Email access**: Gmail API (`users.messages.list` + `users.messages.get`) with **read-only** permission
 - **Phishing protection**: per-link verdicts (Safe / Suspicious / Malicious / Unknown) against the **Hybrid Analysis** threat-intelligence API
+- **File protection**: email attachment scanning via SHA-256 hash DB lookup + risky-extension heuristics (high-risk, macro-enabled, archive)
 
 ---
 
@@ -38,7 +39,7 @@ SIH-2026/
 │   │   │   ├── Layout.jsx              # App bar + user avatar
 │   │   │   ├── EmailList.jsx           # Scrollable inbox, 30s polling
 │   │   │   ├── EmailListItem.jsx       # Sender / subject / date / snippet
-│   │   │   └── EmailDetail.jsx         # Full email + phishing scan results
+│   │   │   └── EmailDetail.jsx         # Full email + phishing & attachment scan results
 │   │   ├── pages/Dashboard.jsx         # Master-detail layout
 │   │   └── utils/format.js             # Date helpers
 │   ├── .env.example / .env.production
@@ -50,8 +51,9 @@ SIH-2026/
 │   │   ├── middleware/auth.js         # Firebase JWT verification
 │   │   ├── routes/gmail.js            # /api/emails endpoints
 │   │   ├── routes/security.js         # POST /api/security/check
-│   │   ├── services/gmail.js          # Gmail API calls + body parsing
-│   │   └── services/phishing.js       # Phishing link scanner (Hybrid Analysis)
+│   │   ├── services/gmail.js          # Gmail API calls + body parsing + attachment extraction
+│   │   ├── services/phishing.js       # Phishing link scanner (Hybrid Analysis)
+│   │   └── services/filecheck.js      # Attachment file scanner (HA DB hash + extension heuristics)
 │   └── package.json
 ├── package.json               # Root package (Render start command)
 └── README.md
@@ -120,7 +122,7 @@ Base URL: `https://sih-2026-backend-re9s.onrender.com`
 | `GET` | `/health` | none | Health check |
 | `GET` | `/api/emails?pageToken=&maxResults=` | Firebase token + Gmail token | List inbox (sender, subject, date, snippet, unread) with pagination |
 | `GET` | `/api/emails/:id` | Firebase token + Gmail token | Full message with decoded HTML + plain body |
-| `POST` | `/api/security/check` | Firebase token + Gmail token | Scan all links in an email for phishing → per-link + summary verdicts |
+| `POST` | `/api/security/check` | Firebase token + Gmail token | Scan all links + attachments in an email → per-link, per-attachment, + combined summary verdicts |
 
 Headers required on `/api/*`:
 
@@ -151,6 +153,60 @@ Each URL found in the email body goes through a **3-layer pipeline** — fronted
 2. **Exact-URL search** — `POST /search/terms?url=<full url>` returns the exact submission record (`verdict`, `av_detect`, `analysis_start_time`). Free, **not** rate-limited, and it resolves malicious URLs even when the per-domain quick-scan quota is exhausted.
 3. **On-demand quick scan** — `POST /quick-scan/url` + polling until the sandbox report finishes. Verdicts come from the aggregate of scanner signals: any `malicious` ⇒ **Malicious**; suspicious/unsure signals ≥ clean signals ⇒ **Suspicious**; otherwise clean ⇒ **Safe**.
 
+## Email Attachment File Protection
+
+Every scanned email also has its attachments checked via `POST /api/security/check`.
+
+### How an attachment is checked (`api/src/services/filecheck.js`)
+
+1. **Gmail API fetch** — `extractAttachments()` walks the MIME multipart tree and collects every attachment (`filename`, `mimeType`, `size`, `attachmentId`). Raw bytes are retrieved via `getAttachmentBytes()`.
+
+2. **SHA-256 hash** — the attachment content is hashed locally and looked up against Hybrid Analysis's `search/hash` endpoint (free, no quota). A `SUCCESS` state report with a clear `verdict` is used; unmapped verdicts (e.g., "no verdict") are discarded, and a null is returned to fall through to heuristics.
+
+3. **Risky-extension heuristic** — if the file hash returns no usable DB record, the file extension is matched against curated risk lists:
+   - **High risk**: `.exe`, `.dll`, `.bat`, `.ps1`, `.js`, `.vbs`, `.scr`, `.com`, `.pif`
+   - **Macro-enabled documents**: `.docm`, `.xlsm`, `.pptm`, `.dotm`, `.xltm`
+   - **Archives** (may contain hidden executables): `.zip`, `.rar`, `.7z`
+
+4. **Final verdict** — if the DB reports malicious/suspicious, that verdict is used. Otherwise, high-risk or macro-enabled extensions map to `suspicious`; archive extensions map to `suspicious` with an "Archive may contain hidden files" note; anything else (`.pdf`, `.docx`, `.png`) is `safe`. Unknown and oversized files (>25MB) return `unknown`.
+
+5. **Concurrency-limited** — checks run up to 4 in parallel; max 10 attachments per email are scanned.
+
+### Example combined response
+
+```json
+{
+  "links": [
+    { "url": "https://something-for-you-check.netlify.app/?id=7202927639", "verdict": "malicious", "source": "db" },
+    { "url": "https://www.google.com/", "verdict": "safe", "source": "db" }
+  ],
+  "attachments": [
+    {
+      "filename": "emotet.bin",
+      "mimeType": "application/octet-stream",
+      "size": 683008,
+      "verdict": "malicious",
+      "source": "db",
+      "sha256": "106fb5f7a2b5d0e0af8609949ef3754335baa684057902a2bf928681045c436a"
+    },
+    {
+      "filename": "invoice.pdf",
+      "mimeType": "application/pdf",
+      "size": 45120,
+      "verdict": "safe",
+      "source": "heuristic",
+      "sha256": "a3f2b1c..."
+    }
+  ],
+  "summary": {
+    "verdict": "malicious",
+    "count": 3,
+    "highestSeverity": "malicious",
+    "counts": { "malicious": 2, "safe": 1, "suspicious": 0, "unknown": 0 }
+  }
+}
+```
+
 ### Verdicts
 
 | Verdict | Meaning | UI |
@@ -162,7 +218,7 @@ Each URL found in the email body goes through a **3-layer pipeline** — fronted
 
 - Gmail/Google **infrastructure URLs** (signature images on `googleusercontent.com`, `gmail.com`, etc.) are auto-skipped — they are always safe and never shown as links to verify.
 - Per-URL checks run with **concurrency 4** and short timeouts, so a full email scan typically finishes in ~2s.
-- The email summary banner reflects the worst verdict found (never claims "safe" while any link is unverified).
+- The email summary banner reflects the worst verdict found across both links **and** attachments (never claims "safe" while any item is unverified or malicious).
 
 ### Example response
 
@@ -194,7 +250,7 @@ Each URL found in the email body goes through a **3-layer pipeline** — fronted
 
 **Frontend** (`web/`): `react` `react-dom` `react-router-dom` `firebase` `@react-oauth/google` `axios` `@mui/material` `@emotion/*` `dompurify` `vite` `tailwindcss`
 
-**Backend** (`api/`): `express` `firebase-admin` `googleapis` `cors` `dotenv` `tldts`
+**Backend** (`api/`): `express` `firebase-admin` `googleapis` `cors` `dotenv` `tldts` `node:crypto` (sha256)
 
 **Threat intelligence**: [Hybrid Analysis (Falcon Sandbox)](https://www.hybrid-analysis.com) public API v2 — free tier. Requires an API key (create at hybrid-analysis.com → *My account → API*).
 
@@ -276,9 +332,10 @@ The inbox polls every 30 seconds (`EmailList.jsx`), so new mail appears without 
 ## Known Limitations
 
 - Read-only by design — no compose/send/archive/delete.
-- Attachments are parsed in the raw message but not rendered as downloadable files.
 - On hard refresh the sessionStorage Gmail token is gone → app shows **"Connect Gmail"** to re-grant (Firebase session persists; one click reconnects).
 - Hybrid Analysis quick scans are limited per domain (~2/hour); the free DB-layer lookups avoid this for already-analyzed URLs, but a **never-before-seen** URL may occasionally report `unknown` when the scan quota is hit.
+- Attachment file protection uses DB hash lookup + extension heuristics. Malware that has never been submitted to Hybrid Analysis and uses a non-risky extension will not be flagged.
+- Gmail blocks known malware attachments from being sent — password-protected zips can bypass Gmail but are flagged as "suspicious (archive)" by our scanner rather than the exact malware hash.
 - Free-tier Render/Vercel cold-start after ~15 min idle: the first load of each deploy after inactivity can take ~30s.
 
 ---
