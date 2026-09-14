@@ -56,10 +56,6 @@ export default function Layout({ user, children }) {
             </Typography>
           </Box>
 
-          <Typography variant="caption" className="hidden sm:block ml-3 text-slate-400">
-            Gmail Security Scanner
-          </Typography>
-
           <Box sx={{ flexGrow: 1 }} />
 
           {user && (
