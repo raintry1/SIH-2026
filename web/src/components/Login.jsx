@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useGoogleLogin } from '@react-oauth/google'
 import { useNavigate } from 'react-router-dom'
-import { Box, Typography, Alert, Paper, Button } from '@mui/material'
+import { Box, Typography, Alert, Button } from '@mui/material'
+import { ShieldOutlined } from '@mui/icons-material'
 import { signInWithGoogleAccessToken, storeGmailToken } from '../auth/authService'
 
 const GMAIL_SCOPES =
@@ -19,7 +20,6 @@ export default function Login() {
         if (!tokenResponse.access_token) {
           throw new Error('No access token returned by Google')
         }
-        // Same token is the Gmail OAuth token AND the Firebase credential
         storeGmailToken(tokenResponse.access_token)
         await signInWithGoogleAccessToken(tokenResponse.access_token)
         navigate('/dashboard')
@@ -37,36 +37,78 @@ export default function Login() {
   })
 
   return (
-    <Box className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Paper className="p-10 rounded-3xl shadow-2xl w-full max-w-md" elevation={6}>
-        <Box className="text-center mb-6">
-          <Typography variant="h4" component="h1" fontWeight={700} className="text-gray-800">
-            Gmail Client
-          </Typography>
-          <Typography variant="body1" className="text-gray-500 mt-2">
-            Sign in with Google to view your inbox
-          </Typography>
-        </Box>
+    <Box className="min-h-screen aurora-bg flex items-center justify-center px-4">
+      {/* Floating glow accents */}
+      <Box
+        className="pointer-events-none absolute rounded-full"
+        sx={{
+          width: 320,
+          height: 320,
+          top: '-80px',
+          left: '10%',
+          background: 'radial-gradient(circle, rgba(99,102,241,0.35), transparent 70%)',
+          filter: 'blur(40px)',
+        }}
+      />
+      <Box
+        className="pointer-events-none absolute rounded-full"
+        sx={{
+          width: 380,
+          height: 380,
+          bottom: '-100px',
+          right: '8%',
+          background: 'radial-gradient(circle, rgba(192,132,252,0.3), transparent 70%)',
+          filter: 'blur(50px)',
+        }}
+      />
 
-        {error && (
-          <Alert severity="error" className="mb-4">
-            {error}
-          </Alert>
-        )}
+      <Box className="relative w-full max-w-md">
+        <Box className="aurora-card rounded-3xl p-8 shadow-2xl text-center">
+          <Box
+            className="mx-auto mb-5 flex items-center justify-center rounded-2xl"
+            sx={{
+              width: 60,
+              height: 60,
+              background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+              boxShadow: '0 8px 30px rgba(129,140,248,0.55)',
+            }}
+          >
+            <ShieldOutlined sx={{ color: '#fff', fontSize: 32 }} />
+          </Box>
 
-        <Box className="flex justify-center">
+          <Typography variant="h4" className="font-extrabold mb-2">
+            <span className="gradient-text">SecureMail</span>
+          </Typography>
+
+          <Typography variant="h6" className="font-bold mb-1.5" sx={{ color: '#f1f5f9' }}>
+            Secure your inbox
+          </Typography>
+          <Typography variant="body2" className="text-slate-400 mb-6">
+            Sign in with Google and scan every email's links and attachments for
+            phishing and malware — in a single click.
+          </Typography>
+
+          {error && (
+            <Alert severity="error" className="mb-5" sx={{ borderRadius: 3, textAlign: 'left' }}>
+              {error}
+            </Alert>
+          )}
+
           <Button
             onClick={() => login()}
             variant="outlined"
             size="large"
             fullWidth
             sx={{
-              color: '#444',
-              borderColor: '#dadce0',
-              bgcolor: '#fff',
-              textTransform: 'none',
-              py: 1.5,
-              '&:hover': { bgcolor: '#f8f9fa', borderColor: '#dadce0' },
+              color: '#e2e8f0',
+              borderColor: 'rgba(148,163,184,0.4)',
+              bgcolor: 'rgba(255,255,255,0.06)',
+              py: 1.6,
+              borderRadius: 2.5,
+              '&:hover': {
+                bgcolor: 'rgba(255,255,255,0.12)',
+                borderColor: 'rgba(129,140,248,0.7)',
+              },
             }}
           >
             <svg width="20" height="20" viewBox="0 0 48 48" className="mr-3">
@@ -87,14 +129,10 @@ export default function Login() {
                 d="M43.6 20.14H42V20H24v8h11.3c-.78 2.27-2.21 4.22-4.05 5.6l6.19 5.24C36.9 42.85 44 38.5 44 24c0-1.32-.13-2.62-.4-3.86z"
               />
             </svg>
-            Sign in with Google
+            Continue with Google
           </Button>
         </Box>
-
-        <Typography variant="caption" className="block text-center text-gray-400 mt-6">
-          We only request read-only access to your Gmail inbox.
-        </Typography>
-      </Paper>
+      </Box>
     </Box>
   )
 }

@@ -44,7 +44,6 @@ export default function EmailList({ selectedId, onSelect }) {
     }
   }, [])
 
-  // Initial + poll for new mail
   useEffect(() => {
     if (firstRun.current) {
       firstRun.current = false
@@ -64,7 +63,7 @@ export default function EmailList({ selectedId, onSelect }) {
   if (loading) {
     return (
       <Box className="h-full flex items-center justify-center">
-        <CircularProgress />
+        <CircularProgress size={36} />
       </Box>
     )
   }
@@ -72,10 +71,16 @@ export default function EmailList({ selectedId, onSelect }) {
   if (error) {
     return (
       <Box className="p-4">
-        <Alert severity="error" className="mb-3">
+        <Alert severity="error" className="mb-3" sx={{ borderRadius: 3 }}>
           {error}
         </Alert>
-        <Button variant="outlined" onClick={() => { setLoading(true); load() }}>
+        <Button
+          variant="outlined"
+          onClick={() => {
+            setLoading(true)
+            load()
+          }}
+        >
           Retry
         </Button>
       </Box>
@@ -84,10 +89,17 @@ export default function EmailList({ selectedId, onSelect }) {
 
   return (
     <Box className="h-full flex flex-col">
-      <Box className="px-4 py-2 flex items-center justify-between bg-white border-b">
-        <Typography variant="subtitle2" className="text-gray-500">
-          {emails.length} conversations
-        </Typography>
+      <Box className="px-5 py-4 flex items-center justify-between bg-transparent border-b"
+        sx={{ borderColor: 'rgba(148,163,184,0.14)' }}
+      >
+        <Box>
+          <Typography variant="subtitle2" className="font-bold text-slate-200 tracking-tight">
+            Inbox
+          </Typography>
+          <Typography variant="caption" className="text-slate-500">
+            {emails.length} conversations
+          </Typography>
+        </Box>
       </Box>
       <List disablePadding className="overflow-y-auto flex-1">
         {emails.map((email) => (
@@ -100,14 +112,16 @@ export default function EmailList({ selectedId, onSelect }) {
         ))}
         {emails.length === 0 && (
           <Box className="p-6 text-center">
-            <Typography variant="body1" className="text-gray-500">
+            <Typography variant="body1" className="text-slate-500">
               No emails found.
             </Typography>
           </Box>
         )}
       </List>
       {hasMore && (
-        <Box className="p-3 text-center border-t bg-white">
+        <Box className="p-3 text-center border-t bg-transparent"
+          sx={{ borderColor: 'rgba(148,163,184,0.14)' }}
+        >
           <Button onClick={handleLoadMore} disabled={loadingMore} variant="outlined" size="small">
             {loadingMore ? <CircularProgress size={20} /> : 'Load more'}
           </Button>

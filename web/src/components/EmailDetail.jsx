@@ -16,35 +16,37 @@ import {
   CheckCircleOutline,
   WarningAmberOutlined,
   GppMaybeOutlined,
-  ErrorOutline,
   HelpOutline,
   AttachFileOutlined,
+  LinkOutlined,
+  InsertDriveFileOutlined,
+  BlockOutlined,
 } from '@mui/icons-material'
 import DOMPurify from 'dompurify'
 import { fetchEmailDetail, checkEmailLinks } from '../api/gmailApi'
 import { formatFullDate } from '../utils/format'
 
-const verdictMeta = {
-  safe: { label: 'Safe', color: 'success', icon: CheckCircleOutline },
-  suspicious: { label: 'Suspicious', color: 'warning', icon: WarningAmberOutlined },
-  malicious: { label: 'Phishing / Malicious', color: 'error', icon: ErrorOutline },
-  unknown: { label: 'Unknown', color: 'default', icon: HelpOutline },
+const verdictChipStyle = {
+  safe: { label: 'Safe', color: '#34d399', bg: 'rgba(16,185,129,0.15)', border: 'rgba(16,185,129,0.4)' },
+  suspicious: { label: 'Suspicious', color: '#fbbf24', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.45)' },
+  malicious: { label: 'Malicious', color: '#fb7185', bg: 'rgba(244,63,94,0.15)', border: 'rgba(244,63,94,0.5)' },
+  unknown: { label: 'Unknown', color: '#94a3b8', bg: 'rgba(148,163,184,0.1)', border: 'rgba(148,163,184,0.35)' },
 }
 
 const summaryMeta = {
-  safe: { title: 'No phishing detected', severity: 'success', icon: CheckCircleOutline },
-  suspicious: { title: 'Suspicious link detected', severity: 'warning', icon: WarningAmberOutlined },
-  malicious: { title: 'Phishing risk detected!', severity: 'error', icon: GppMaybeOutlined },
-  unknown: { title: 'Could not verify links', severity: 'info', icon: HelpOutline },
+  safe: { title: 'No threats detected', severity: 'safe', icon: CheckCircleOutline },
+  suspicious: { title: 'Suspicious content detected', severity: 'suspicious', icon: WarningAmberOutlined },
+  malicious: { title: 'Security risk detected!', severity: 'malicious', icon: GppMaybeOutlined },
+  unknown: { title: 'Could not verify content', severity: 'info', icon: HelpOutline },
 }
 
 function bannerFor(summary) {
   if (!summary || summary.count === 0) {
     return {
-      severity: 'success',
-      title: 'No links or attachments',
+      severity: 'safe',
+      title: 'Nothing to check',
       icon: ShieldOutlined,
-      text: 'Nothing to check in this email.',
+      text: 'This email contains no links or attachments.',
     }
   }
   const worst = summary.highestSeverity || summary.verdict || 'unknown'
@@ -54,47 +56,146 @@ function bannerFor(summary) {
   const scope = parts.join(' and ') || `${summary.count} item(s)`
   if (worst === 'malicious') {
     return {
-      severity: 'error',
-      title: 'Phishing risk detected!',
+      severity: 'malicious',
+      title: 'Security risk detected!',
       icon: GppMaybeOutlined,
-      text: `Found ${summary.counts?.malicious || 0} malicious link/attachment(s) in this email. Do not click or open them.`,
+      text: `Found ${summary.counts?.malicious || 0} malicious link/attachment(s). Do not click or open them — treat this email as a threat.`,
     }
   }
   if (worst === 'suspicious') {
     return {
-      severity: 'warning',
+      severity: 'suspicious',
       title: 'Suspicious content detected',
       icon: WarningAmberOutlined,
-      text: `This email contains ${summary.counts?.suspicious || 0} suspicious link/attachment(s). Be careful before opening.`,
+      text: `Contains ${summary.counts?.suspicious || 0} suspicious link/attachment(s). Take caution before opening anything.`,
     }
   }
   if (worst === 'unknown') {
     return {
-      severity: 'info',
-      title: 'Could not verify links',
+      severity: 'unknown',
+      title: 'Could not verify content',
       icon: HelpOutline,
-      text: `Checked ${scope} - some could not be verified. Open links and attachments with caution.`,
+      text: `Checked ${scope} — some items could not be verified. Open with caution.`,
     }
   }
   return {
-    severity: 'success',
-    title: 'No phishing detected',
+    severity: 'safe',
+    title: 'No threats detected',
     icon: CheckCircleOutline,
-    text: `Checked ${scope} - all appear safe.`,
+    text: `Checked ${scope} — everything appears safe.`,
   }
 }
 
 function VerdictChip({ verdict, threatScore, source }) {
-  const meta = verdictMeta[verdict] || verdictMeta.unknown
-  const Icon = meta.icon
-  let label = meta.label
+  const style = verdictChipStyle[verdict] || verdictChipStyle.unknown
+  let label = style.label
   if (threatScore != null && Number.isFinite(threatScore) && threatScore > 0) {
     label += ` (${threatScore})`
   }
   if (source) {
-    label += ` · ${source === 'db' ? 'DB' : source === 'quick-scan' ? 'Scan' : source}`
+    const sourceLabel = source === 'db' ? 'DB' : source === 'quick-scan' ? 'Scan' : source === 'heuristic' ? 'Heuristic' : source
+    label += ` · ${sourceLabel}`
   }
-  return <Chip size="small" color={meta.color} icon={<Icon />} label={label} variant="outlined" />
+  return (
+    <Chip
+      size="small"
+      label={label}
+      sx={{
+        flexShrink: 0,
+        color: style.color,
+        bgcolor: style.bg,
+        border: `1px solid ${style.border}`,
+        fontWeight: 700,
+        fontSize: '0.72rem',
+        '& .MuiChip-label': { px: 1.2 },
+      }}
+    />
+  )
+}
+
+function SecurityBanner({ banner, loading }) {
+  const Icon = banner.icon
+  const gradientClass =
+    banner.severity === 'malicious'
+      ? 'gradient-malicious'
+      : banner.severity === 'suspicious'
+        ? 'gradient-suspicious'
+        : banner.severity === 'safe'
+          ? 'gradient-safe'
+          : 'gradient-info'
+  const iconColor =
+    banner.severity === 'malicious'
+      ? '#fb7185'
+      : banner.severity === 'suspicious'
+        ? '#fbbf24'
+        : banner.severity === 'safe'
+          ? '#34d399'
+          : '#38bdf8'
+
+  return (
+    <Box className={`rounded-2xl p-4 mb-4 ${gradientClass}`}>
+      <Box className="flex items-start gap-3">
+        <Box
+          className="flex items-center justify-center shrink-0 rounded-xl"
+          sx={{ width: 40, height: 40, bgcolor: `${iconColor}22`, border: `1px solid ${iconColor}55` }}
+        >
+          <Icon sx={{ color: iconColor }} />
+        </Box>
+        <Box className="min-w-0 flex-1">
+          <Typography variant="subtitle1" fontWeight={700} sx={{ color: '#f1f5f9' }}>
+            {banner.title}
+          </Typography>
+          <Typography variant="body2" className="text-slate-300" sx={{ color: '#cbd5e1' }}>
+            {banner.text}
+          </Typography>
+          {loading && (
+            <Box className="mt-2.5">
+              <Typography variant="caption" className="text-slate-400">
+                Scanning links and attachments...
+              </Typography>
+              <Box className="h-1.5 w-full bg-slate-700/40 overflow-hidden rounded-full mt-1.5">
+                <Box className="h-full shimmer-bar w-full" />
+              </Box>
+            </Box>
+          )}
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
+function ThreatCard({ icon: Icon, title, count, items, renderItem }) {
+  if (count === 0) return null
+  return (
+    <Box
+      className="rounded-2xl p-3.5 mb-4"
+      sx={{ bgcolor: 'rgba(255,255,255,0.035)', border: '1px solid rgba(148,163,184,0.16)' }}
+    >
+      <Typography variant="subtitle2" fontWeight={700} className="mb-2.5 flex items-center gap-1.5" sx={{ color: '#e2e8f0' }}>
+        <Icon fontSize="small" sx={{ color: '#818cf8' }} />
+        {title}
+        <Chip
+          size="small"
+          label={count}
+          sx={{ ml: 1, height: 20, fontSize: '0.7rem', fontWeight: 700, bgcolor: 'rgba(99,102,241,0.2)', color: '#a5b4fc' }}
+        />
+      </Typography>
+      <Stack spacing={1}>
+        {items.map((item, i) => (
+          <Box
+            key={i}
+            className="flex items-start gap-2.5 p-2.5 rounded-xl"
+            sx={{
+              bgcolor: item.verdict === 'malicious' ? 'rgba(244,63,94,0.10)' : item.verdict === 'suspicious' ? 'rgba(245,158,11,0.08)' : 'rgba(255,255,255,0.02)',
+              border: `1px solid ${item.verdict === 'malicious' ? 'rgba(244,63,94,0.3)' : item.verdict === 'suspicious' ? 'rgba(245,158,11,0.3)' : 'rgba(148,163,184,0.15)'}`,
+            }}
+          >
+            {renderItem(item)}
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  )
 }
 
 export default function EmailDetail({ emailId, email }) {
@@ -159,7 +260,7 @@ export default function EmailDetail({ emailId, email }) {
   if (!emailId) {
     return (
       <Box className="h-full flex items-center justify-center">
-        <Typography variant="body1" className="text-gray-400">
+        <Typography variant="body1" className="text-slate-500">
           Select an email to read it
         </Typography>
       </Box>
@@ -169,7 +270,7 @@ export default function EmailDetail({ emailId, email }) {
   if (loading) {
     return (
       <Box className="h-full flex items-center justify-center">
-        <CircularProgress />
+        <CircularProgress size={36} />
       </Box>
     )
   }
@@ -177,7 +278,9 @@ export default function EmailDetail({ emailId, email }) {
   if (error) {
     return (
       <Box className="p-4">
-        <Alert severity="error">{error}</Alert>
+        <Alert severity="error" sx={{ borderRadius: 3 }}>
+          {error}
+        </Alert>
       </Box>
     )
   }
@@ -185,50 +288,39 @@ export default function EmailDetail({ emailId, email }) {
   const sender = detail?.from || email?.sender?.name || email?.sender?.email || 'Unknown'
   const to = detail?.to || ''
   const banner = securityLoading
-    ? { severity: 'info', title: 'Checking email...', icon: ShieldOutlined, text: 'Analyzing links and attachments in this email.' }
+    ? {
+        severity: 'info',
+        title: 'Scanning this email...',
+        icon: ShieldOutlined,
+        text: 'Checking every link and attachment against Hybrid Analysis threat intelligence.',
+      }
     : bannerFor(security?.summary)
-  const BannerIcon = banner.icon
 
   return (
-    <Box className="h-full overflow-y-auto p-6">
-      <Typography variant="h6" fontWeight={600} className="mb-2">
+    <Box className="h-full overflow-y-auto p-6 md:p-8">
+      <Typography variant="h6" fontWeight={700} className="mb-4 tracking-tight" sx={{ color: '#f1f5f9' }}>
         {email?.subject || detail?.subject || '(no subject)'}
       </Typography>
 
-      {securityLoading || security ? (
-        <Alert
-          severity={banner.severity}
-          className="mb-3"
-          icon={<BannerIcon fontSize="inherit" />}
-        >
-          <AlertTitle>{banner.title}</AlertTitle>
-          {banner.text}
-          {securityLoading && (
-            <Box className="mt-2">
-              <Typography variant="caption" className="text-gray-500">
-                Checking up to 20 links and 10 attachments...
-              </Typography>
-              <div className="h-1 w-full bg-gray-200 overflow-hidden rounded">
-                <div className="h-full animate-pulse bg-blue-500" style={{ width: '60%' }} />
-              </div>
-            </Box>
-          )}
+      {(securityLoading || security) && <SecurityBanner banner={banner} loading={securityLoading} />}
+
+      {!securityLoading && securityError && (
+        <Alert severity="warning" className="mb-4" sx={{ borderRadius: 3 }}>
+          <AlertTitle>Security check failed</AlertTitle>
+          Could not check this email: {securityError}
         </Alert>
-      ) : securityError ? (
-        <Alert severity="warning" className="mb-3">
-          <AlertTitle>Link check failed</AlertTitle>
-          Could not check links: {securityError}
-        </Alert>
-      ) : null}
+      )}
 
       <Box className="flex items-center gap-3 mb-1">
-        <Avatar className="mr-1" sx={{ bgcolor: 'primary.main' }}>
+        <Avatar className="shrink-0" sx={{ bgcolor: 'primary.main', fontWeight: 700 }}>
           {(sender[0] || '?').toUpperCase()}
         </Avatar>
-        <Box>
-          <Typography variant="subtitle2">{sender}</Typography>
+        <Box className="min-w-0">
+          <Typography variant="subtitle2" fontWeight={700} sx={{ color: '#e2e8f0' }}>
+            {sender}
+          </Typography>
           {to && (
-            <Typography variant="caption" className="text-gray-500">
+            <Typography variant="caption" className="text-slate-500">
               to {to}
             </Typography>
           )}
@@ -239,103 +331,110 @@ export default function EmailDetail({ emailId, email }) {
               size="small"
               variant="outlined"
               label={formatFullDate(detail.date)}
-              className="text-gray-500"
+              sx={{ borderColor: 'rgba(148,163,184,0.3)', color: '#94a3b8' }}
             />
           )}
         </Box>
       </Box>
 
-      <Divider className="my-4" />
+      <Divider className="my-4" sx={{ borderColor: 'rgba(148,163,184,0.14)' }} />
 
       {!securityLoading && security?.links?.length > 0 && (
-        <Box className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <Typography variant="subtitle2" fontWeight={600} className="mb-2 flex items-center gap-1">
-            <ShieldOutlined fontSize="small" className="text-gray-500" />
-            Links in this email ({security.links.length})
-          </Typography>
-          <Stack spacing={1}>
-            {security.links.map((l, i) => {
-              const blocked = l.verdict === 'malicious' || l.verdict === 'suspicious'
-              let host = l.url
-              try {
-                host = new URL(l.url).hostname
-              } catch {
-                /* keep raw */
-              }
-              return (
-                <Box
-                  key={i}
-                  className={`flex items-start gap-2 p-2 rounded-md border ${blocked ? 'bg-red-50 border-red-200' : 'border-gray-100'}`}
-                >
-                  <VerdictChip verdict={l.verdict} threatScore={l.threatScore} source={l.source} />
-                  <Box className="min-w-0">
-                    <Typography variant="body2" fontWeight={600} className="text-gray-800">
-                      {host}
-                    </Typography>
-                    <Link
-                      href={l.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm break-all text-blue-600"
-                      onClick={(e) => {
-                        if (blocked) e.preventDefault()
-                      }}
+        <ThreatCard
+          icon={LinkOutlined}
+          title="Links in this email"
+          count={security.links.length}
+          items={security.links}
+          renderItem={(l) => {
+            const blocked = l.verdict === 'malicious' || l.verdict === 'suspicious'
+            let host = l.url
+            try {
+              host = new URL(l.url).hostname
+            } catch {
+              /* keep raw */
+            }
+            return (
+              <>
+                <VerdictChip verdict={l.verdict} threatScore={l.threatScore} source={l.source} />
+                <Box className="min-w-0">
+                  <Typography variant="body2" fontWeight={600} className="text-slate-100">
+                    {host}
+                  </Typography>
+                  <Link
+                    href={l.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm break-all"
+                    sx={{ color: blocked ? '#fb7185' : '#818cf8' }}
+                    onClick={(e) => {
+                      if (blocked) e.preventDefault()
+                    }}
+                  >
+                    {l.url}
+                  </Link>
+                  {blocked && (
+                    <Typography
+                      variant="caption"
+                      className="flex items-center gap-1 mt-0.5"
+                      sx={{ color: '#fb7185', fontWeight: 600 }}
                     >
-                      {l.url}
-                    </Link>
-                    {blocked && (
-                      <Typography variant="caption" className="text-red-600">
-                        Click blocked - {l.verdict === 'malicious' ? 'phishing link' : 'proceed with caution'}
-                      </Typography>
-                    )}
-                  </Box>
+                      <BlockOutlined sx={{ fontSize: 13 }} />
+                      Click blocked — {l.verdict === 'malicious' ? 'phishing link' : 'proceed with caution'}
+                    </Typography>
+                  )}
                 </Box>
-              )
-            })}
-          </Stack>
-        </Box>
+              </>
+            )
+          }}
+        />
       )}
 
       {!securityLoading && security?.attachments?.length > 0 && (
-        <Box className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <Typography variant="subtitle2" fontWeight={600} className="mb-2 flex items-center gap-1">
-            <AttachFileOutlined fontSize="small" className="text-gray-500" />
-            Attachments ({security.attachments.length})
-          </Typography>
-          <Stack spacing={1}>
-            {security.attachments.map((a, i) => {
-              const blocked = a.verdict === 'malicious' || a.verdict === 'suspicious'
-              const sizeText = a.size > 1024 * 1024 ? `${(a.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`
-              return (
-                <Box
-                  key={i}
-                  className={`flex items-start gap-2 p-2 rounded-md border ${blocked ? 'bg-red-50 border-red-200' : 'border-gray-100'}`}
-                >
-                  <VerdictChip verdict={a.verdict} threatScore={a.threatScore} source={a.source} />
-                  <Box className="min-w-0">
-                    <Typography variant="body2" fontWeight={600} className="text-gray-800 break-all">
-                      {a.filename}
+        <ThreatCard
+          icon={AttachFileOutlined}
+          title="Attachments"
+          count={security.attachments.length}
+          items={security.attachments}
+          renderItem={(a) => {
+            const blocked = a.verdict === 'malicious' || a.verdict === 'suspicious'
+            const sizeText =
+              a.size > 1024 * 1024
+                ? `${(a.size / 1024 / 1024).toFixed(1)} MB`
+                : `${Math.max(1, Math.round(a.size / 1024))} KB`
+            return (
+              <>
+                <VerdictChip verdict={a.verdict} threatScore={a.threatScore} source={a.source} />
+                <Box className="min-w-0">
+                  <Typography variant="body2" fontWeight={600} className="break-all text-slate-100">
+                    <InsertDriveFileOutlined sx={{ fontSize: 14, mr: 0.5, verticalAlign: 'text-bottom', color: '#94a3b8' }} />
+                    {a.filename}
+                  </Typography>
+                  <Typography variant="caption" className="text-slate-500">
+                    {a.mimeType} · {sizeText}
+                    {a.sha256 ? (
+                      <Box component="span" className="font-mono text-slate-500" sx={{ fontSize: 11 }}>
+                        {' '}
+                        · sha256:{a.sha256.slice(0, 12)}…
+                      </Box>
+                    ) : null}
+                  </Typography>
+                  {a.note && (
+                    <Typography variant="caption" className={`block break-words mt-0.5 ${blocked ? '' : ''}`} sx={{ color: blocked ? '#fb7185' : '#94a3b8' }}>
+                      {a.note}
                     </Typography>
-                    <Typography variant="caption" className="text-gray-500">
-                      {a.mimeType} · {sizeText}
-                      {a.sha256 ? ` · sha256:${a.sha256.slice(0, 12)}…` : ''}
+                  )}
+                  {blocked && (
+                    <Typography variant="caption" className="block mt-0.5" sx={{ color: '#fb7185', fontWeight: 600 }}>
+                      {a.verdict === 'malicious'
+                        ? 'Malicious attachment — do not open or download'
+                        : 'Suspicious attachment — open with caution'}
                     </Typography>
-                    {a.note && (
-                      <Typography variant="caption" className={`block break-words ${blocked ? 'text-red-600' : 'text-gray-600'}`}>
-                        {a.note}
-                      </Typography>
-                    )}
-                    {blocked && (
-                      <Typography variant="caption" className="block text-red-600">
-                        {a.verdict === 'malicious' ? 'Malicious attachment - do not open or download' : 'Suspicious attachment - open with caution'}
-                      </Typography>
-                    )}
-                  </Box>
+                  )}
                 </Box>
-              )
-            })}
-          </Stack>
-        </Box>
+              </>
+            )
+          }}
+        />
       )}
 
       <Box className="mt-4">
@@ -345,10 +444,7 @@ export default function EmailDetail({ emailId, email }) {
             dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(detail.bodyHtml) }}
           />
         ) : (
-          <Typography
-            variant="body1"
-            className="whitespace-pre-wrap break-words text-gray-800"
-          >
+          <Typography variant="body1" className="whitespace-pre-wrap break-words text-slate-200">
             {detail?.bodyText || '(No readable body content)'}
           </Typography>
         )}

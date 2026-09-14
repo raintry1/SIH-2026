@@ -24,7 +24,7 @@ export default function App() {
 
   if (loading) {
     return (
-      <Box className="min-h-screen flex items-center justify-center">
+      <Box className="min-h-screen aurora-bg flex items-center justify-center">
         <CircularProgress />
       </Box>
     )

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useGoogleLogin } from '@react-oauth/google'
-import { Box, Typography, Button, Paper, Alert } from '@mui/material'
+import { Box, Typography, Button, Alert } from '@mui/material'
+import { EmailOutlined, ShieldOutlined } from '@mui/icons-material'
 import { storeGmailToken } from '../auth/authService'
 
 const GMAIL_SCOPES =
@@ -28,39 +29,60 @@ export default function GmailConnector({ onConnected }) {
   })
 
   return (
-    <Box className="min-h-[calc(100vh-64px)] flex items-center justify-center bg-gray-50">
-      <Paper className="p-10 rounded-3xl shadow-lg w-full max-w-md" elevation={3}>
-        <Box className="text-center mb-6">
-          <Typography variant="h5" component="h2" fontWeight={600}>
+    <Box className="min-h-[calc(100vh-64px)] flex items-center justify-center px-4">
+      <Box className="relative w-full max-w-md">
+        <Box className="aurora-card rounded-3xl p-8 shadow-2xl text-center">
+          <Box
+            className="mx-auto mb-5 flex items-center justify-center rounded-2xl"
+            sx={{
+              width: 64,
+              height: 64,
+              background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+              boxShadow: '0 8px 28px rgba(129,140,248,0.5)',
+            }}
+          >
+            <EmailOutlined sx={{ color: '#fff', fontSize: 32 }} />
+          </Box>
+
+          <Typography variant="h5" component="h2" fontWeight={700} className="mb-1.5">
             Connect your Gmail
           </Typography>
-          <Typography variant="body2" className="text-gray-500 mt-2">
-            To read your inbox securely, grant read-only Gmail access.
+          <Typography variant="body2" className="text-slate-400 mb-6">
+            Grant read-only Gmail access to start scanning your inbox for
+            phishing links and malware attachments.
           </Typography>
-        </Box>
 
-        {error && (
-          <Alert severity="error" className="mb-4">
-            {error}
-          </Alert>
-        )}
+          {error && (
+            <Alert severity="error" className="mb-5" sx={{ borderRadius: 3 }}>
+              {error}
+            </Alert>
+          )}
 
-        <Box className="flex justify-center">
           <Button
             onClick={() => login()}
             variant="contained"
             size="large"
-            sx={{ textTransform: 'none', px: 4 }}
-            color="primary"
+            fullWidth
+            startIcon={<ShieldOutlined />}
+            sx={{
+              py: 1.5,
+              borderRadius: 2.5,
+              background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+              boxShadow: '0 8px 24px rgba(129,140,248,0.4)',
+              '&:hover': {
+                background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+                opacity: 0.92,
+              },
+            }}
           >
             Connect Gmail
           </Button>
-        </Box>
 
-        <Typography variant="caption" className="block text-center text-gray-400 mt-6">
-          We only request read-only access to your Gmail inbox.
-        </Typography>
-      </Paper>
+          <Typography variant="caption" className="block text-center text-slate-500 mt-6">
+            We only request read-only access to your Gmail inbox.
+          </Typography>
+        </Box>
+      </Box>
     </Box>
   )
 }
