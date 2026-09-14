@@ -171,7 +171,9 @@ function aggregateSearch(searchData) {
     return { verdict: 'suspicious', label: 'Suspicious', threatScore: 50, source: 'db' }
   }
   // No dominant flag in the recent window -> safe, saves scan quota.
-  // But never report "safe" while a recent malicious analysis exists.
+  // But never report "safe" while a recent malicious analysis exists, and
+  // never treat unmapped/"no verdict" reports as clean - they prove nothing.
+  if (malicious + suspicious + safe === 0) return null
   if (malicious === 0 && recent.length > 0) {
     return { verdict: 'safe', label: 'No specific threat', threatScore: 0, source: 'db' }
   }
@@ -237,6 +239,7 @@ function aggregateSearchTerms(data, url) {
   if (suspicious > 0 && suspicious >= safe) {
     return { verdict: 'suspicious', label: 'Suspicious', threatScore: 50, source: 'db' }
   }
+  if (malicious + suspicious + safe === 0) return null
   if (malicious === 0 && exact.length > 0) {
     return { verdict: 'safe', label: 'No specific threat', threatScore: 0, source: 'db' }
   }

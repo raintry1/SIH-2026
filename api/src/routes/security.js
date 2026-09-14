@@ -1,15 +1,49 @@
 import { Router } from 'express'
 import { verifyFirebaseToken } from '../middleware/auth.js'
-import { getEmail } from '../services/gmail.js'
+import { getEmail, getAttachmentBytes } from '../services/gmail.js'
 import { checkEmailLinks } from '../services/phishing.js'
+import { checkEmailAttachments } from '../services/filecheck.js'
 
 const router = Router()
 
 // All security routes require a verified Firebase token
 router.use(verifyFirebaseToken)
 
+const SEVERITY_RANK = { safe: 0, unknown: 1, suspicious: 2, malicious: 3 }
+
+// Merge link + attachment severity into one overall summary. The worst element
+// decides (malicious > suspicious > unknown > safe), so the banner never
+// claims "safe" while an unverified link or file is present.
+function combineSummaries(linkSummary, fileSummary) {
+  const pieces = ['links', 'files']
+  const verdicts = [linkSummary?.verdict, fileSummary?.verdict]
+  let highest = 'safe'
+  for (const v of verdicts) {
+    if (v && (SEVERITY_RANK[v] ?? 0) > (SEVERITY_RANK[highest] ?? 0)) highest = v
+  }
+  const counts = { links: {}, files: {} }
+  for (const pc of pieces) {
+    const which = pc === 'links' ? linkSummary : fileSummary
+    for (const [k, v] of Object.entries(which?.counts || {})) {
+      counts[pc][k] = v
+    }
+  }
+  const merged = {}
+  for (const [k, v] of Object.entries(counts.links)) merged[k] = (merged[k] || 0) + v
+  for (const [k, v] of Object.entries(counts.files)) merged[k] = (merged[k] || 0) + v
+  return {
+    verdict: highest,
+    highestSeverity: highest,
+    count: (linkSummary?.count || 0) + (fileSummary?.count || 0),
+    counts: merged,
+    linkCount: linkSummary?.count || 0,
+    fileCount: fileSummary?.count || 0,
+  }
+}
+
 // POST /api/security/check { emailId }
-// Fetches the email, extracts links, and returns per-link + summary verdicts.
+// Fetches the email, extracts links AND attachments, and returns per-link +
+// per-file verdicts plus a combined summary.
 router.post('/check', async (req, res) => {
   try {
     const { emailId } = req.body || {}
@@ -20,8 +54,18 @@ router.post('/check', async (req, res) => {
     const accessToken = req.headers['x-gmail-token']
     const email = await getEmail(accessToken, emailId)
     const bodyHtml = email?.bodyHtml || ''
-    const result = await checkEmailLinks(bodyHtml)
-    res.json(result)
+    const attachments = email?.attachments || []
+
+    const linkResult = await checkEmailLinks(bodyHtml)
+    const fileResult = await checkEmailAttachments(attachments, (file) =>
+      getAttachmentBytes(accessToken, emailId, file.attachmentId)
+    )
+
+    res.json({
+      links: linkResult.links,
+      attachments: fileResult.attachments,
+      summary: combineSummaries(linkResult.summary, fileResult.summary),
+    })
   } catch (err) {
     console.error('security check error:', err.message)
     const status = err.status || (err.response?.status) || 500

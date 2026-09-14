@@ -58,6 +58,30 @@ function extractBody(parts) {
   }
 }
 
+// Collect attachment metadata from the multipart tree. Inline images and real
+// attachments both appear as parts that carry a filename; the bytes are fetched
+// lazily on demand (attachmentId) by the security scanner, never here.
+function extractAttachments(parts) {
+  const out = []
+  const walk = (nodes) => {
+    if (!nodes) return
+    for (const node of nodes) {
+      if (node.filename) {
+        out.push({
+          filename: node.filename,
+          mimeType: node.mimeType || 'application/octet-stream',
+          size: Number(node.body?.size) || 0,
+          attachmentId: node.body?.attachmentId || null,
+        })
+      } else if (node.parts) {
+        walk(node.parts)
+      }
+    }
+  }
+  walk(parts)
+  return out
+}
+
 function mapMessage(msg) {
   const headers = msg.payload?.headers || []
   const from = parseAddress(getHeader(headers, 'From'))
@@ -123,6 +147,25 @@ export async function getEmail(accessToken, id) {
     ...message,
     internalDate: msg.internalDate,
     labelIds: msg.labelIds || [],
+    attachments: extractAttachments(msg.payload?.parts),
     ...body,
   }
+}
+
+// Fetch raw bytes for a single attachment by its Gmail attachmentId.
+export async function getAttachmentBytes(accessToken, messageId, attachmentId) {
+  if (!attachmentId) throw new Error('Attachment has no id')
+  const gmail = getGmailClient(accessToken)
+  const res = await gmail.users.messages.attachments.get({
+    userId: 'me',
+    messageId,
+    id: attachmentId,
+  })
+  const data = res.data?.data
+  if (!data) {
+    const err = new Error('Attachment is empty')
+    err.status = 400
+    throw err
+  }
+  return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
 }

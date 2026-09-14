@@ -18,6 +18,7 @@ import {
   GppMaybeOutlined,
   ErrorOutline,
   HelpOutline,
+  AttachFileOutlined,
 } from '@mui/icons-material'
 import DOMPurify from 'dompurify'
 import { fetchEmailDetail, checkEmailLinks } from '../api/gmailApi'
@@ -41,26 +42,30 @@ function bannerFor(summary) {
   if (!summary || summary.count === 0) {
     return {
       severity: 'success',
-      title: 'No links in this email',
+      title: 'No links or attachments',
       icon: ShieldOutlined,
-      text: 'No URLs were found to check.',
+      text: 'Nothing to check in this email.',
     }
   }
   const worst = summary.highestSeverity || summary.verdict || 'unknown'
+  const parts = []
+  if (summary.linkCount) parts.push(`${summary.linkCount} link(s)`)
+  if (summary.fileCount) parts.push(`${summary.fileCount} attachment(s)`)
+  const scope = parts.join(' and ') || `${summary.count} item(s)`
   if (worst === 'malicious') {
     return {
       severity: 'error',
       title: 'Phishing risk detected!',
       icon: GppMaybeOutlined,
-      text: `Found ${summary.counts?.malicious || 0} malicious link(s) in this email. Do not click them.`,
+      text: `Found ${summary.counts?.malicious || 0} malicious link/attachment(s) in this email. Do not click or open them.`,
     }
   }
   if (worst === 'suspicious') {
     return {
       severity: 'warning',
-      title: 'Suspicious link detected',
+      title: 'Suspicious content detected',
       icon: WarningAmberOutlined,
-      text: `This email contains ${summary.counts?.suspicious || 0} suspicious link(s). Be careful before opening.`,
+      text: `This email contains ${summary.counts?.suspicious || 0} suspicious link/attachment(s). Be careful before opening.`,
     }
   }
   if (worst === 'unknown') {
@@ -68,14 +73,14 @@ function bannerFor(summary) {
       severity: 'info',
       title: 'Could not verify links',
       icon: HelpOutline,
-      text: 'The link check could not finish. Open links with caution.',
+      text: `Checked ${scope} - some could not be verified. Open links and attachments with caution.`,
     }
   }
   return {
     severity: 'success',
     title: 'No phishing detected',
     icon: CheckCircleOutline,
-    text: `Checked ${summary.count} link(s) - all appear safe.`,
+    text: `Checked ${scope} - all appear safe.`,
   }
 }
 
@@ -180,7 +185,7 @@ export default function EmailDetail({ emailId, email }) {
   const sender = detail?.from || email?.sender?.name || email?.sender?.email || 'Unknown'
   const to = detail?.to || ''
   const banner = securityLoading
-    ? { severity: 'info', title: 'Checking links...', icon: ShieldOutlined, text: 'Analyzing URLs in this email for phishing.' }
+    ? { severity: 'info', title: 'Checking email...', icon: ShieldOutlined, text: 'Analyzing links and attachments in this email.' }
     : bannerFor(security?.summary)
   const BannerIcon = banner.icon
 
@@ -201,7 +206,7 @@ export default function EmailDetail({ emailId, email }) {
           {securityLoading && (
             <Box className="mt-2">
               <Typography variant="caption" className="text-gray-500">
-                Checking up to 20 links...
+                Checking up to 20 links and 10 attachments...
               </Typography>
               <div className="h-1 w-full bg-gray-200 overflow-hidden rounded">
                 <div className="h-full animate-pulse bg-blue-500" style={{ width: '60%' }} />
@@ -281,6 +286,48 @@ export default function EmailDetail({ emailId, email }) {
                     {blocked && (
                       <Typography variant="caption" className="text-red-600">
                         Click blocked - {l.verdict === 'malicious' ? 'phishing link' : 'proceed with caution'}
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+              )
+            })}
+          </Stack>
+        </Box>
+      )}
+
+      {!securityLoading && security?.attachments?.length > 0 && (
+        <Box className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <Typography variant="subtitle2" fontWeight={600} className="mb-2 flex items-center gap-1">
+            <AttachFileOutlined fontSize="small" className="text-gray-500" />
+            Attachments ({security.attachments.length})
+          </Typography>
+          <Stack spacing={1}>
+            {security.attachments.map((a, i) => {
+              const blocked = a.verdict === 'malicious' || a.verdict === 'suspicious'
+              const sizeText = a.size > 1024 * 1024 ? `${(a.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`
+              return (
+                <Box
+                  key={i}
+                  className={`flex items-start gap-2 p-2 rounded-md border ${blocked ? 'bg-red-50 border-red-200' : 'border-gray-100'}`}
+                >
+                  <VerdictChip verdict={a.verdict} threatScore={a.threatScore} source={a.source} />
+                  <Box className="min-w-0">
+                    <Typography variant="body2" fontWeight={600} className="text-gray-800 break-all">
+                      {a.filename}
+                    </Typography>
+                    <Typography variant="caption" className="text-gray-500">
+                      {a.mimeType} · {sizeText}
+                      {a.sha256 ? ` · sha256:${a.sha256.slice(0, 12)}…` : ''}
+                    </Typography>
+                    {a.note && (
+                      <Typography variant="caption" className={`block break-words ${blocked ? 'text-red-600' : 'text-gray-600'}`}>
+                        {a.note}
+                      </Typography>
+                    )}
+                    {blocked && (
+                      <Typography variant="caption" className="block text-red-600">
+                        {a.verdict === 'malicious' ? 'Malicious attachment - do not open or download' : 'Suspicious attachment - open with caution'}
                       </Typography>
                     )}
                   </Box>
