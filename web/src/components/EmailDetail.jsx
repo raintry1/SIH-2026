@@ -118,7 +118,6 @@ function VerdictChip({ verdict, threatScore, source }) {
 function ScanProgress() {
   const startedAt = useRef(Date.now())
   const [progress, setProgress] = useState(0)
-  const [elapsed, setElapsed] = useState(0)
   const [stage, setStage] = useState(0)
 
   const stages = [
@@ -134,7 +133,6 @@ function ScanProgress() {
   useEffect(() => {
     const interval = setInterval(() => {
       const secsElapsed = Math.floor((Date.now() - startedAt.current) / 1000)
-      setElapsed(secsElapsed)
       const target = 88 // % cap
       const max = 28 // seconds
       const easeIn = 1 - Math.pow(1 - Math.min(1, secsElapsed / max), 3)
@@ -148,9 +146,6 @@ function ScanProgress() {
     return () => clearInterval(interval)
   }, [])
 
-  const mins = Math.floor(elapsed / 60)
-  const secs = String(elapsed % 60).padStart(2, '0')
-
   return (
     <Box className="mt-3">
       <Box className="flex items-center justify-between mb-2 gap-3">
@@ -158,9 +153,8 @@ function ScanProgress() {
           <Box className="w-2 h-2 rounded-full shrink-0" sx={{ bgcolor: '#818cf8', animation: 'scanPulse 1.2s ease-in-out infinite' }} />
           {stages[stage]}
         </Typography>
-        <Typography variant="caption" className="font-mono flex items-center gap-3 shrink-0" sx={{ color: '#cbd5e1' }}>
+        <Typography variant="caption" className="font-mono shrink-0" sx={{ color: '#cbd5e1' }}>
           <span className="tabular-nums">{progress}%</span>
-          <span className="tabular-nums text-slate-400">{mins}:{secs}</span>
         </Typography>
       </Box>
       <Box className="h-2.5 w-full rounded-full overflow-hidden" sx={{ bgcolor: 'rgba(30,41,59,0.9)', border: '1px solid rgba(148,163,184,0.2)' }}>
