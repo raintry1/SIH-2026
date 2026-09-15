@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Box,
   Typography,
@@ -10,6 +10,7 @@ import {
   Chip,
   Stack,
   Link,
+  IconButton,
 } from '@mui/material'
 import {
   ShieldOutlined,
@@ -21,6 +22,7 @@ import {
   LinkOutlined,
   InsertDriveFileOutlined,
   BlockOutlined,
+  ArrowBackOutlined,
 } from '@mui/icons-material'
 import DOMPurify from 'dompurify'
 import { fetchEmailDetail, checkEmailLinks } from '../api/gmailApi'
@@ -113,6 +115,70 @@ function VerdictChip({ verdict, threatScore, source }) {
   )
 }
 
+function ScanProgress() {
+  const startedAt = useRef(Date.now())
+  const [progress, setProgress] = useState(0)
+  const [elapsed, setElapsed] = useState(0)
+  const [stage, setStage] = useState(0)
+
+  const stages = [
+    'Extracting links & attachments...',
+    'Querying threat intelligence...',
+    'Analyzing file signatures...',
+    'Finalizing security report...',
+  ]
+
+  // Smooth, game-style progress: eases toward 88% over ~28s so users never sit
+  // wondering where the scan is. Actual result replaces the bar the moment the
+  // API responds (100% is only ever set by the result render).
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const secsElapsed = Math.floor((Date.now() - startedAt.current) / 1000)
+      setElapsed(secsElapsed)
+      const target = 88 // % cap
+      const max = 28 // seconds
+      const easeIn = 1 - Math.pow(1 - Math.min(1, secsElapsed / max), 3)
+      setProgress(Math.min(target, Math.round(easeIn * target)))
+      setStage((s) => {
+        const thresholds = [7, 14, 21]
+        if (s < stages.length - 1 && secsElapsed >= thresholds[s]) return s + 1
+        return s
+      })
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const mins = Math.floor(elapsed / 60)
+  const secs = String(elapsed % 60).padStart(2, '0')
+
+  return (
+    <Box className="mt-3">
+      <Box className="flex items-center justify-between mb-2 gap-3">
+        <Typography variant="caption" className="flex items-center gap-2 text-slate-300" sx={{ fontWeight: 600 }}>
+          <Box className="w-2 h-2 rounded-full shrink-0" sx={{ bgcolor: '#818cf8', animation: 'scanPulse 1.2s ease-in-out infinite' }} />
+          {stages[stage]}
+        </Typography>
+        <Typography variant="caption" className="font-mono flex items-center gap-3 shrink-0" sx={{ color: '#cbd5e1' }}>
+          <span className="tabular-nums">{progress}%</span>
+          <span className="tabular-nums text-slate-400">{mins}:{secs}</span>
+        </Typography>
+      </Box>
+      <Box className="h-2.5 w-full rounded-full overflow-hidden" sx={{ bgcolor: 'rgba(30,41,59,0.9)', border: '1px solid rgba(148,163,184,0.2)' }}>
+        <Box
+          className="h-full rounded-full"
+          sx={{
+            width: `${Math.max(6, progress)}%`,
+            background: 'linear-gradient(90deg, #6366f1, #a855f7, #38bdf8)',
+            backgroundSize: '200% 100%',
+            animation: 'shimmer 1.6s ease-in-out infinite, scanFill 1s ease-out',
+            transition: 'width 0.9s cubic-bezier(0.22, 1, 0.36, 1)',
+          }}
+        />
+      </Box>
+    </Box>
+  )
+}
+
 function SecurityBanner({ banner, loading }) {
   const Icon = banner.icon
   const gradientClass =
@@ -148,16 +214,7 @@ function SecurityBanner({ banner, loading }) {
           <Typography variant="body2" className="text-slate-300" sx={{ color: '#cbd5e1' }}>
             {banner.text}
           </Typography>
-          {loading && (
-            <Box className="mt-2.5">
-              <Typography variant="caption" className="text-slate-400">
-                Scanning links and attachments...
-              </Typography>
-              <Box className="h-1.5 w-full bg-slate-700/40 overflow-hidden rounded-full mt-1.5">
-                <Box className="h-full shimmer-bar w-full" />
-              </Box>
-            </Box>
-          )}
+          {loading && <ScanProgress />}
         </Box>
       </Box>
     </Box>
@@ -184,7 +241,7 @@ function ThreatCard({ icon: Icon, title, count, items, renderItem }) {
         {items.map((item, i) => (
           <Box
             key={i}
-            className="flex items-start gap-2.5 p-2.5 rounded-xl"
+            className="flex flex-wrap sm:flex-nowrap items-start gap-2.5 p-2.5 rounded-xl"
             sx={{
               bgcolor: item.verdict === 'malicious' ? 'rgba(244,63,94,0.10)' : item.verdict === 'suspicious' ? 'rgba(245,158,11,0.08)' : 'rgba(255,255,255,0.02)',
               border: `1px solid ${item.verdict === 'malicious' ? 'rgba(244,63,94,0.3)' : item.verdict === 'suspicious' ? 'rgba(245,158,11,0.3)' : 'rgba(148,163,184,0.15)'}`,
@@ -198,7 +255,7 @@ function ThreatCard({ icon: Icon, title, count, items, renderItem }) {
   )
 }
 
-export default function EmailDetail({ emailId, email }) {
+export default function EmailDetail({ emailId, email, onBack }) {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -297,8 +354,18 @@ export default function EmailDetail({ emailId, email }) {
     : bannerFor(security?.summary)
 
   return (
-    <Box className="h-full overflow-y-auto p-6 md:p-8">
-      <Typography variant="h6" fontWeight={700} className="mb-4 tracking-tight" sx={{ color: '#f1f5f9' }}>
+    <Box className="h-full overflow-y-auto p-4 sm:p-6 md:p-8 min-w-0">
+      {onBack && (
+        <Box className="flex items-center gap-2 mb-3 -ml-1">
+          <IconButton onClick={onBack} aria-label="back" sx={{ color: '#94a3b8' }}>
+            <ArrowBackOutlined />
+          </IconButton>
+          <Typography variant="caption" className="text-slate-400 font-medium">
+            Back to inbox
+          </Typography>
+        </Box>
+      )}
+      <Typography variant="h6" fontWeight={700} className="mb-4 tracking-tight break-words" sx={{ color: '#f1f5f9' }}>
         {email?.subject || detail?.subject || '(no subject)'}
       </Typography>
 
@@ -311,21 +378,21 @@ export default function EmailDetail({ emailId, email }) {
         </Alert>
       )}
 
-      <Box className="flex items-center gap-3 mb-1">
+      <Box className="flex flex-wrap items-center gap-3 mb-1 min-w-0">
         <Avatar className="shrink-0" sx={{ bgcolor: 'primary.main', fontWeight: 700 }}>
           {(sender[0] || '?').toUpperCase()}
         </Avatar>
-        <Box className="min-w-0">
-          <Typography variant="subtitle2" fontWeight={700} sx={{ color: '#e2e8f0' }}>
+        <Box className="min-w-0 flex-1">
+          <Typography variant="subtitle2" fontWeight={700} className="break-words" sx={{ color: '#e2e8f0' }}>
             {sender}
           </Typography>
           {to && (
-            <Typography variant="caption" className="text-slate-500">
+            <Typography variant="caption" className="text-slate-500 break-all">
               to {to}
             </Typography>
           )}
         </Box>
-        <Box className="ml-auto">
+        <Box className="shrink-0">
           {detail?.date && (
             <Chip
               size="small"
@@ -437,7 +504,7 @@ export default function EmailDetail({ emailId, email }) {
         />
       )}
 
-      <Box className="mt-4">
+      <Box className="mt-4 min-w-0 overflow-x-auto">
         {detail?.bodyHtml ? (
           <div
             className="email-body prose prose-sm max-w-none"

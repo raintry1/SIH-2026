@@ -29,9 +29,9 @@ export default function GmailConnector({ onConnected }) {
   })
 
   return (
-    <Box className="min-h-[calc(100vh-64px)] flex items-center justify-center px-4">
+    <Box className="app-min-height flex items-center justify-center px-4 py-8">
       <Box className="relative w-full max-w-md">
-        <Box className="aurora-card rounded-3xl p-8 shadow-2xl text-center">
+        <Box className="aurora-card rounded-3xl p-6 sm:p-8 shadow-2xl text-center">
           <Box
             className="mx-auto mb-5 flex items-center justify-center rounded-2xl"
             sx={{

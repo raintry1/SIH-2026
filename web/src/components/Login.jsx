@@ -37,10 +37,10 @@ export default function Login() {
   })
 
   return (
-    <Box className="min-h-screen aurora-bg flex items-center justify-center px-4">
+    <Box className="min-h-screen aurora-bg relative overflow-hidden flex items-center justify-center px-4 py-8">
       {/* Floating glow accents */}
       <Box
-        className="pointer-events-none absolute rounded-full"
+        className="pointer-events-none absolute rounded-full hidden sm:block"
         sx={{
           width: 320,
           height: 320,
@@ -51,7 +51,7 @@ export default function Login() {
         }}
       />
       <Box
-        className="pointer-events-none absolute rounded-full"
+        className="pointer-events-none absolute rounded-full hidden sm:block"
         sx={{
           width: 380,
           height: 380,
@@ -63,7 +63,7 @@ export default function Login() {
       />
 
       <Box className="relative w-full max-w-md">
-        <Box className="aurora-card rounded-3xl p-8 shadow-2xl text-center">
+        <Box className="aurora-card rounded-3xl p-6 sm:p-8 shadow-2xl text-center w-full">
           <Box
             className="mx-auto mb-5 flex items-center justify-center rounded-2xl"
             sx={{
@@ -89,7 +89,7 @@ export default function Login() {
           </Typography>
 
           {error && (
-            <Alert severity="error" className="mb-5" sx={{ borderRadius: 3, textAlign: 'left' }}>
+            <Alert severity="error" className="mb-5" sx={{ borderRadius: 3, textAlign: 'left', fontSize: '0.85rem' }}>
               {error}
             </Alert>
           )}
@@ -111,7 +111,7 @@ export default function Login() {
               },
             }}
           >
-            <svg width="20" height="20" viewBox="0 0 48 48" className="mr-3">
+            <svg width="20" height="20" viewBox="0 0 48 48" className="mr-3 shrink-0">
               <path
                 fill="#FFC107"
                 d="M43.6 20.14H42V20H24v8h11.3c-1.63 4.73-6.11 8-11.3 8-6.63 0-12-5.37-12-12s5.37-12 12-12c3.06 0 5.83 1.16 7.94 3.02l5.66-5.66A19.9 19.9 0 0 0 24 4C12.95 4 4 12.95 4 24s8.95 20 20 20 20-8.95 20-20c0-1.32-.13-2.62-.4-3.86z"

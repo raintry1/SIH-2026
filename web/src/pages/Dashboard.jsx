@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { useMediaQuery, useTheme, IconButton, Box, Typography } from '@mui/material'
+import { useMediaQuery, useTheme, Box, Typography } from '@mui/material'
 import Layout from '../components/Layout'
 import EmailList from '../components/EmailList'
 import EmailDetail from '../components/EmailDetail'
 import GmailConnector from '../components/GmailConnector'
 import { hasGmailToken } from '../auth/authService'
-import { ArrowBack, MarkEmailReadOutlined } from '@mui/icons-material'
+import { MarkEmailReadOutlined } from '@mui/icons-material'
 
 export default function Dashboard({ user }) {
   const theme = useTheme()
@@ -18,6 +18,8 @@ export default function Dashboard({ user }) {
     setSelectedEmail(email)
   }
 
+  const handleBack = () => setSelectedId(null)
+
   if (!hasGmailToken()) {
     return (
       <Layout user={user}>
@@ -29,7 +31,7 @@ export default function Dashboard({ user }) {
   return (
     <Layout user={user}>
       <Box
-        className="flex h-[calc(100vh-64px)]"
+        className="flex app-height"
         sx={{ bgcolor: 'rgba(13, 18, 34, 0.4)' }}
       >
         {(!isMobile || !selectedId) && (
@@ -41,15 +43,8 @@ export default function Dashboard({ user }) {
         )}
 
         {selectedId ? (
-          <Box className="flex-1 min-w-0 relative">
-            {isMobile && (
-              <Box className="absolute top-2 left-2 z-10">
-                <IconButton onClick={() => setSelectedId(null)} aria-label="back">
-                  <ArrowBack />
-                </IconButton>
-              </Box>
-            )}
-            <EmailDetail emailId={selectedId} email={selectedEmail} />
+          <Box className="flex-1 min-w-0">
+            <EmailDetail emailId={selectedId} email={selectedEmail} onBack={isMobile ? handleBack : undefined} />
           </Box>
         ) : (
           !isMobile && (

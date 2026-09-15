@@ -87,7 +87,7 @@ export default function Layout({ user, children }) {
           </Menu>
         </Toolbar>
       </AppBar>
-      <main className="flex-1">{children}</main>
+      <main className="flex-1 min-w-0 overflow-x-hidden">{children}</main>
     </div>
   )
 }
