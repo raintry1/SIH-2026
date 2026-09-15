@@ -56,10 +56,14 @@ router.post('/check', async (req, res) => {
     const bodyHtml = email?.bodyHtml || ''
     const attachments = email?.attachments || []
 
-    const linkResult = await checkEmailLinks(bodyHtml)
-    const fileResult = await checkEmailAttachments(attachments, (file) =>
-      getAttachmentBytes(accessToken, emailId, file.attachmentId)
-    )
+    // Links and attachments are scanned in PARALLEL - worst case time drops
+    // from links+files to max(links, files).
+    const [linkResult, fileResult] = await Promise.all([
+      checkEmailLinks(bodyHtml),
+      checkEmailAttachments(attachments, (file) =>
+        getAttachmentBytes(accessToken, emailId, file.attachmentId)
+      ),
+    ])
 
     res.json({
       links: linkResult.links,

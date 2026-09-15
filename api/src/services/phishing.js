@@ -10,6 +10,9 @@ const MAX_LINKS = 20
 const MAX_CONCURRENCY = 4
 const QUICK_SCAN_POLL_INTERVAL_MS = 4000
 const QUICK_SCAN_MAX_WAIT_MS = 90000
+// Give the free DB lookups this head start before spending a quick-scan
+// submission. Known URLs resolve in <3s, so no quota is wasted on them.
+const QUICK_SCAN_GRACE_MS = 3000
 
 // Gmail/Google-owned infrastructure hosts are always safe to open, never
 // flagged by scanners, and just slow the check down - skip them entirely:
@@ -44,6 +47,11 @@ function apiHeaders() {
     'api-key': API_KEY,
     'user-agent': 'Falcon Sandbox',
   }
+}
+
+const SEVERITY_RANK = { safe: 0, unknown: 1, suspicious: 2, malicious: 3 }
+function severityRankOf(r) {
+  return r ? SEVERITY_RANK[r.verdict] ?? 0 : 0
 }
 
 // Normalize the string verdicts returned by DB lookups.
@@ -310,7 +318,8 @@ function aggregateQuickScan(scanData) {
   return null
 }
 
-// Full check pipeline for a single URL
+// Full check pipeline for a single URL: every source runs in PARALLEL so the
+// answer arrives as soon as the fastest conclusive source reports.
 async function checkUrl(url) {
   const cached = cache.get(url)
   if (cached && Date.now() - cached.checkedAt < CACHE_TTL_MS) {
@@ -325,51 +334,80 @@ async function checkUrl(url) {
     return { url, verdict: hostHit.verdict, label: hostHit.label, threatScore: hostHit.threatScore, source: hostHit.source }
   }
 
-  let result = { verdict: 'unknown', label: 'No verdict', threatScore: null, source: null }
+  const defaultResult = { verdict: 'unknown', label: 'No verdict', threatScore: null, source: null }
+  const isConclusive = (r) => Boolean(r) && r.verdict !== 'unknown'
 
-  try {
-    // 1) Free DB lookup by URL hash (no sandbox quota consumed)
+  // Kick off every source immediately: two free DB lookups plus the on-demand
+  // quick scan. All three run at the same time; the first conclusive result wins.
+  const dbTask = (async () => {
     try {
       const hashData = await getUrlHash(url)
       if (hashData?.sha256) {
         const searchData = await searchByHash(hashData.sha256)
-        const aggregated = aggregateSearch(searchData)
-        if (aggregated) result = aggregated
+        return aggregateSearch(searchData)
       }
     } catch (dbErr) {
       console.warn(`Hybrid DB lookup failed for ${url}: ${dbErr.message}`)
     }
+    return null
+  })()
 
-    // 2) Free exact-URL search - catches URLs that exist as submission records
-    // even when nothing was detonated under their hash. Never rate-limited.
-    if (result.verdict === 'unknown') {
-      try {
-        const termsData = await searchByTerms(url)
-        const aggregated = aggregateSearchTerms(termsData, url)
-        if (aggregated) result = aggregated
-      } catch (termsErr) {
-        console.warn(`Hybrid search/terms failed for ${url}: ${termsErr.message}`)
+  const termsTask = (async () => {
+    try {
+      const termsData = await searchByTerms(url)
+      return aggregateSearchTerms(termsData, url)
+    } catch (termsErr) {
+      console.warn(`Hybrid search/terms failed for ${url}: ${termsErr.message}`)
+      return null
+    }
+  })()
+
+  // The quick scan is a scarce resource (per-domain quota), so it waits a short
+  // grace period for the free DB lookups to answer. If they stay silent it
+  // starts immediately - never waiting on slow DB timeouts.
+  const scanTask = (async () => {
+    const early = await Promise.race([
+      dbTask.then((r) => (isConclusive(r) ? 'db' : null)),
+      termsTask.then((r) => (isConclusive(r) ? 'terms' : null)),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), QUICK_SCAN_GRACE_MS)),
+    ])
+    if (early) return null // DB answered first - don't burn scan quota
+    try {
+      const submitRes = await submitQuickScan(url)
+      const scanId = submitRes.id || submitRes.scan_id
+      if (scanId) {
+        const scanData = await pollQuickScan(scanId)
+        return aggregateQuickScan(scanData)
+      }
+    } catch (scanErr) {
+      console.warn(`Hybrid quick-scan failed for ${url}: ${scanErr.message}`)
+    }
+    return null
+  })()
+
+  // Resolve the moment a conclusive answer exists - a fast DB hit must not be
+  // held hostage by a still-running sandbox scan (and vice versa).
+  const result = await new Promise((resolve) => {
+    let done = false
+    const finish = (r) => {
+      if (!done) {
+        done = true
+        resolve(r)
       }
     }
 
-    // 3) No conclusive verdict yet -> run a quick scan
-    if (result.verdict === 'unknown') {
-      try {
-        const submitRes = await submitQuickScan(url)
-        const scanId = submitRes.id || submitRes.scan_id
-        if (scanId) {
-          const scanData = await pollQuickScan(scanId)
-          const aggregated = aggregateQuickScan(scanData)
-          if (aggregated) result = aggregated
-        }
-      } catch (scanErr) {
-        console.warn(`Hybrid quick-scan failed for ${url}: ${scanErr.message}`)
-      }
-    }
-  } catch (err) {
-    console.warn(`Hybrid check failed for ${url}: ${err.message}`)
-    result = { verdict: 'unknown', label: 'No verdict', threatScore: null, source: null }
-  }
+    dbTask
+      .then(async (dbResult) => {
+        const termsResult = await termsTask
+        const best = [dbResult, termsResult]
+          .filter(isConclusive)
+          .sort((a, b) => (severityRankOf(b) || 0) - (severityRankOf(a) || 0))[0]
+        if (best) return finish(best)
+        // Both DB routes silent - wait on the sandbox scan already in flight.
+        scanTask.then((scanResult) => finish(scanResult || defaultResult))
+      })
+      .catch(() => finish(defaultResult))
+  })
 
   cache.set(url, { ...result, checkedAt: Date.now() })
   if (host) domainCache.set(host, { ...result, checkedAt: Date.now() })
