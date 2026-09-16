@@ -23,6 +23,16 @@ import {
   InsertDriveFileOutlined,
   BlockOutlined,
   ArrowBackOutlined,
+  PublicOutlined,
+  DnsOutlined,
+  LockOutlined,
+  SecurityOutlined,
+  LocationOnOutlined,
+  NetworkCheckOutlined,
+  ExpandMoreOutlined,
+  ExpandLessOutlined,
+  DomainOutlined,
+  LanguageOutlined,
 } from '@mui/icons-material'
 import DOMPurify from 'dompurify'
 import { fetchEmailDetail, checkEmailLinks } from '../api/gmailApi'
@@ -249,6 +259,271 @@ function ThreatCard({ icon: Icon, title, count, items, renderItem }) {
   )
 }
 
+// ── Domain Intelligence components ────────────────────────────────────────────
+
+const sectionCardSx = {
+  bgcolor: 'rgba(255,255,255,0.03)',
+  border: '1px solid rgba(148,163,184,0.14)',
+  borderRadius: '12px',
+}
+
+function IntelKeyValue({ label, value, mono, warn }) {
+  if (value == null || value === '' || value === false) return null
+  return (
+    <Box className="flex gap-2 items-start py-0.5">
+      <Typography variant="caption" className="shrink-0 font-semibold mt-px" sx={{ color: '#94a3b8', minWidth: 90 }}>
+        {label}
+      </Typography>
+      <Typography
+        variant="caption"
+        className={mono ? 'font-mono break-all' : 'break-all'}
+        sx={{ color: warn ? '#fbbf24' : '#e2e8f0', fontWeight: 500 }}
+      >
+        {value}
+      </Typography>
+    </Box>
+  )
+}
+
+function IntelSection({ icon: Icon, title, children, count, defaultOpen }) {
+  const [open, setOpen] = useState(defaultOpen ?? false)
+  return (
+    <Box className="mb-1.5" sx={sectionCardSx}>
+      <Box
+        className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
+        onClick={() => setOpen((o) => !o)}
+        sx={{ '&:hover': { bgcolor: 'rgba(255,255,255,0.03)' } }}
+      >
+        <Icon sx={{ color: '#818cf8', fontSize: 16 }} />
+        <Typography variant="caption" fontWeight={700} className="flex-1" sx={{ color: '#e2e8f0' }}>
+          {title}
+        </Typography>
+        {count != null && (
+          <Chip
+            size="small"
+            label={count}
+            sx={{ height: 18, fontSize: '0.65rem', fontWeight: 700, bgcolor: 'rgba(99,102,241,0.18)', color: '#a5b4fc', mr: 0.5 }}
+          />
+        )}
+        {open ? <ExpandLessOutlined sx={{ fontSize: 16, color: '#94a3b8' }} /> : <ExpandMoreOutlined sx={{ fontSize: 16, color: '#94a3b8' }} />}
+      </Box>
+      {open && <Box className="px-3 pb-2.5 pt-1">{children}</Box>}
+    </Box>
+  )
+}
+
+function DomainInfoHeader({ intel }) {
+  return (
+    <Box className="mb-2.5 pb-2.5" sx={{ borderBottom: '1px solid rgba(148,163,184,0.14)' }}>
+      <Box className="flex flex-wrap items-center gap-2 mb-1.5">
+        <Typography variant="caption" fontWeight={700} sx={{ color: '#a5b4fc' }}>
+          {intel.registrableDomain}
+        </Typography>
+        {intel.hosting && (
+          <Chip
+            size="small"
+            label={intel.hosting.platform}
+            sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700, bgcolor: 'rgba(251,191,36,0.15)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)' }}
+          />
+        )}
+        {intel.tinyTld && (
+          <Chip
+            size="small"
+            label="Uncommon TLD"
+            sx={{ height: 20, fontSize: '0.65rem', fontWeight: 700, bgcolor: 'rgba(251,146,60,0.12)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.3)' }}
+          />
+        )}
+      </Box>
+      {intel.isSubdomain && (
+        <Typography variant="caption" sx={{ color: '#94a3b8' }}>
+          Subdomain: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{intel.subdomain}</span>
+          <span style={{ margin: '0 4px', color: '#64748b' }}>|</span>
+          Base domain: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{intel.registrableDomain}</span>
+        </Typography>
+      )}
+      {intel.hosting && (
+        <Typography variant="caption" className="block mt-1" sx={{ color: '#fbbf24', fontWeight: 500 }}>
+          ⚠ {intel.hosting.note}
+        </Typography>
+      )}
+      {intel.shortener && (
+        <Box className="mt-1.5 p-2 rounded-lg" sx={{ bgcolor: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
+          <Typography variant="caption" sx={{ color: '#c7d2fe', fontWeight: 600 }}>
+            🔗 Short link via {intel.shortener.service}
+          </Typography>
+          {intel.shortener.finalHost && (
+            <Typography variant="caption" className="block mt-0.5" sx={{ color: '#94a3b8' }}>
+              Redirects to: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{intel.shortener.finalHost}</span>
+            </Typography>
+          )}
+          {intel.shortener.finalUrl && (
+            <Typography variant="caption" className="block mt-0.5 font-mono break-all" sx={{ color: '#818cf8', fontSize: 11 }}>
+              {intel.shortener.finalUrl}
+            </Typography>
+          )}
+          {!intel.shortener.finalHost && (
+            <Typography variant="caption" className="block mt-0.5" sx={{ color: '#f87171', fontWeight: 500 }}>
+              Redirect target unreachable
+            </Typography>
+          )}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+function WhoisSection({ data }) {
+  if (!data) return null
+  return (
+    <IntelSection icon={DomainOutlined} title="WHOIS & Registration">
+      <IntelKeyValue label="Registrar" value={data.registrar} />
+      <IntelKeyValue label="Created" value={data.created} />
+      <IntelKeyValue label="Updated" value={data.updated} />
+      <IntelKeyValue label="Expires" value={data.expires} />
+      {data.domainAgeDays != null && (
+        <IntelKeyValue
+          label="Domain Age"
+          value={`${Math.floor(data.domainAgeDays / 365)}y ${data.domainAgeDays % 365}d`}
+          warn={data.domainAgeDays < 180}
+        />
+      )}
+      {data.nameservers && data.nameservers.length > 0 && (
+        <IntelKeyValue label="Nameservers" value={data.nameservers.join(', ')} mono />
+      )}
+      {data.status && data.status.length > 0 && (
+        <IntelKeyValue label="Status" value={data.status.join(', ')} />
+      )}
+    </IntelSection>
+  )
+}
+
+function DnsSection({ data }) {
+  if (!data) return null
+  const hasAny = data.a?.length || data.aaaa?.length || data.mx?.length || data.ns?.length || data.txt?.length || data.cname?.length
+  if (!hasAny) return null
+  return (
+    <IntelSection icon={DnsOutlined} title="DNS Records">
+      {data.a?.length > 0 && <IntelKeyValue label="A (IPv4)" value={data.a.join(', ')} mono />}
+      {data.aaaa?.length > 0 && <IntelKeyValue label="AAAA (IPv6)" value={data.aaaa.join(', ')} mono />}
+      {data.mx?.length > 0 && <IntelKeyValue label="MX (Mail)" value={data.mx.join(', ')} mono />}
+      {data.ns?.length > 0 && <IntelKeyValue label="NS" value={data.ns.join(', ')} mono />}
+      {data.cname?.length > 0 && <IntelKeyValue label="CNAME" value={data.cname.join(', ')} mono />}
+      {data.txt?.length > 0 && <IntelKeyValue label="TXT" value={data.txt.join(' | ')} mono />}
+    </IntelSection>
+  )
+}
+
+function GeoSection({ data }) {
+  if (!data?.details) return null
+  const d = data.details
+  const parts = [d.city, d.region, d.country_name].filter(Boolean).join(', ')
+  return (
+    <IntelSection icon={LocationOnOutlined} title="IP & Location">
+      {data.ip && <IntelKeyValue label="IP Address" value={data.ip} mono />}
+      {parts && <IntelKeyValue label="Location" value={parts} />}
+      {d.country_code && <IntelKeyValue label="Country" value={`${d.country_code}  (${d.country_name || ''})`} />}
+      {d.connection?.isp && <IntelKeyValue label="ISP" value={d.connection.isp} />}
+      {d.connection?.org && d.connection.org !== d.connection?.isp && <IntelKeyValue label="Org" value={d.connection.org} />}
+      {d.connection?.asn && <IntelKeyValue label="ASN" value={String(d.connection.asn)} />}
+      {d.security?.proxy && <IntelKeyValue label="Proxy/VPN" value="Yes" warn />}
+      {d.security?.tor && <IntelKeyValue label="Tor Exit" value="Yes" warn />}
+    </IntelSection>
+  )
+}
+
+function SslSection({ data }) {
+  if (!data) return null
+  return (
+    <IntelSection icon={LockOutlined} title="SSL Certificate">
+      {data.issuer && <IntelKeyValue label="Issuer" value={data.issuer} />}
+      {data.commonName && <IntelKeyValue label="Common Name" value={data.commonName} mono />}
+      {data.notBefore && <IntelKeyValue label="Valid From" value={data.notBefore} />}
+      {data.notAfter && <IntelKeyValue label="Valid Until" value={data.notAfter} />}
+      {data.daysLeft != null && (
+        <IntelKeyValue
+          label="Days Left"
+          value={data.daysLeft === 0 ? 'Expired' : String(data.daysLeft)}
+          warn={data.daysLeft < 30}
+        />
+      )}
+      {data.count != null && data.count > 1 && <IntelKeyValue label="Total Certs" value={String(data.count)} />}
+      {data.firstSeen && <IntelKeyValue label="First Seen" value={data.firstSeen} />}
+    </IntelSection>
+  )
+}
+
+function ThreatSection({ data }) {
+  if (!data) return null
+  return (
+    <IntelSection icon={SecurityOutlined} title="Threat Intel">
+      <Box className="flex items-center gap-2 mb-1">
+        <Box
+          className="w-2.5 h-2.5 rounded-full shrink-0"
+          sx={{ bgcolor: data.listed ? '#fb7185' : '#34d399' }}
+        />
+        <Typography variant="caption" fontWeight={700} sx={{ color: data.listed ? '#fb7185' : '#34d399' }}>
+          {data.listed ? 'LISTED on threat databases' : 'Not listed in any blocklist'}
+        </Typography>
+      </Box>
+      {data.message && (
+        <Typography variant="caption" className="block" sx={{ color: '#94a3b8', mt: 0.5 }}>
+          {data.message}
+        </Typography>
+      )}
+      {data.riskScore != null && (
+        <IntelKeyValue label="Risk Score" value={String(data.riskScore) + ' / 100'} warn={data.riskScore > 50} />
+      )}
+    </IntelSection>
+  )
+}
+
+function ReverseIpSection({ data }) {
+  if (!data?.domains || data.domains.length === 0) return null
+  const show = data.domains.slice(0, 8)
+  return (
+    <IntelSection icon={NetworkCheckOutlined} title="Reverse IP" count={data.domains.length}>
+      <IntelKeyValue label="IP Address" value={data.ip} mono />
+      <Typography variant="caption" className="block mb-1" sx={{ color: '#94a3b8' }}>
+        {data.domains.length} other domain(s) share this IP:
+      </Typography>
+      <Box className="flex flex-wrap gap-1">
+        {show.map((d, i) => (
+          <Chip
+            key={i}
+            size="small"
+            label={d}
+            sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(148,163,184,0.1)', color: '#cbd5e1', border: '1px solid rgba(148,163,184,0.18)' }}
+          />
+        ))}
+        {data.domains.length > 8 && (
+          <Chip size="small" label={`+${data.domains.length - 8}`} sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(148,163,184,0.08)', color: '#94a3b8' }} />
+        )}
+      </Box>
+    </IntelSection>
+  )
+}
+
+function DomainIntelCard({ intel }) {
+  if (!intel) return null
+  return (
+    <Box className="mt-2.5 mb-1 p-3 rounded-xl" sx={{ bgcolor: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.18)' }}>
+      <Box className="flex items-center gap-2 mb-1">
+        <PublicOutlined sx={{ color: '#818cf8', fontSize: 16 }} />
+        <Typography variant="caption" fontWeight={700} sx={{ color: '#a5b4fc' }}>
+          Domain Intelligence
+        </Typography>
+      </Box>
+      <DomainInfoHeader intel={intel} />
+      <WhoisSection data={intel.whois} />
+      <DnsSection data={intel.dns} />
+      <GeoSection data={intel.geo} />
+      <SslSection data={intel.ssl} />
+      <ThreatSection data={intel.threat} />
+      <ReverseIpSection data={intel.reverseIp} />
+    </Box>
+  )
+}
+
 export default function EmailDetail({ emailId, email, onBack }) {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -417,7 +692,7 @@ export default function EmailDetail({ emailId, email, onBack }) {
             return (
               <>
                 <VerdictChip verdict={l.verdict} threatScore={l.threatScore} source={l.source} />
-                <Box className="min-w-0">
+                <Box className="min-w-0 flex-1">
                   <Typography variant="body2" fontWeight={600} className="text-slate-100">
                     {host}
                   </Typography>
@@ -442,6 +717,9 @@ export default function EmailDetail({ emailId, email, onBack }) {
                       <BlockOutlined sx={{ fontSize: 13 }} />
                       Click blocked — {l.verdict === 'malicious' ? 'phishing link' : 'proceed with caution'}
                     </Typography>
+                  )}
+                  {(l.verdict === 'malicious' || l.verdict === 'suspicious') && l.domainIntel && (
+                    <DomainIntelCard intel={l.domainIntel} />
                   )}
                 </Box>
               </>

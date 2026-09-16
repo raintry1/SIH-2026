@@ -3,6 +3,8 @@
 // conclusive, submit a quick scan and poll until finished.
 // Never throws on provider failures - returns unknown verdict so the app keeps working.
 
+import { getDomainIntel, resolveShortener } from './domainIntel.js'
+
 const BASE_URL = 'https://hybrid-analysis.com/api/v2'
 const API_KEY = process.env.HYBRIDANALYSIS_API_KEY || ''
 
@@ -120,7 +122,7 @@ async function getUrlHash(url) {
     method: 'POST',
     headers: { ...apiHeaders(), 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ url }).toString(),
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(25000),
   })
   if (!res.ok) throw new Error(`hash-for-url failed: ${res.status}`)
   return res.json()
@@ -132,7 +134,7 @@ async function searchByHash(sha256) {
   const res = await fetch(`${BASE_URL}/search/hash?hash=${encodeURIComponent(sha256)}`, {
     method: 'GET',
     headers: apiHeaders(),
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(25000),
   })
   if (res.status === 404) return { reports: [] }
   if (!res.ok) throw new Error(`search/hash failed: ${res.status}`)
@@ -141,51 +143,81 @@ async function searchByHash(sha256) {
 
 // Combine DB report verdicts into one result.
 // Historical detonations are noisy: google.com carries old (2020-21) malicious
-// reports that no longer reflect reality. Only RECENT successful analyses are
-// counted - a report is recent when its id timestamp (first 8 id-hex chars,
-// unix seconds) falls inside the window. Flags are trusted only when they
-// dominate the recent window; mixed data falls through to a live quick scan.
-const RECENT_WINDOW_SECONDS = 2 * 365 * 24 * 60 * 60
+// reports that no longer reflect reality. So there are TWO windows:
+//   - FRESH (2yr): recent real-world evidence. Trust flags only when they
+//     outnumber clean reports in this window; a flag-free but clean window
+//     means the domain checks out TODAY.
+//   - LONG (5yr): used only when the fresh window has no data at all.
+// Mixed/unclear data falls through to heuristics and then a live quick scan.
+const FRESH_WINDOW_SECONDS = 2 * 365 * 24 * 60 * 60
+const LONG_WINDOW_SECONDS = 5 * 365 * 24 * 60 * 60
 
-function isRecentId(id, nowSeconds) {
-  if (!/^[0-9a-f]{24}$/i.test(id)) return false
+function tsOfId(id) {
+  if (!/^[0-9a-f]{24}$/i.test(id)) return null
   const ts = parseInt(id.slice(0, 8), 16)
-  return Number.isFinite(ts) && (nowSeconds - ts) <= RECENT_WINDOW_SECONDS
+  return Number.isFinite(ts) ? ts : null
+}
+
+function idIsWithin(id, seconds, nowSeconds) {
+  const ts = tsOfId(id)
+  return ts !== null && nowSeconds - ts <= seconds
+}
+
+function countVerdicts(reports, nowSeconds, windowSeconds) {
+  const out = { malicious: 0, suspicious: 0, safe: 0, total: 0 }
+  for (const rep of reports) {
+    if (rep.state !== 'SUCCESS' || !rep.verdict) continue
+    if (!idIsWithin(rep.id, windowSeconds, nowSeconds)) continue
+    const mapped = verdictFromString(rep.verdict)
+    if (!mapped) continue
+    out.total += 1
+    if (mapped.verdict === 'malicious') out.malicious += 1
+    else if (mapped.verdict === 'suspicious') out.suspicious += 1
+    else out.safe += 1
+  }
+  return out
+}
+
+function resolveVerdictFromCounts(fresh, long) {
+  // Fresh (last 2 years) evidence is what the domain looks like TODAY.
+  if (fresh.total > 0) {
+    if (fresh.malicious > 0 && fresh.malicious >= fresh.safe) {
+      return { verdict: 'malicious', label: 'Malicious', threatScore: 80, source: 'db' }
+    }
+    if (fresh.suspicious > 0 && fresh.suspicious >= fresh.safe) {
+      return { verdict: 'suspicious', label: 'Suspicious', threatScore: 50, source: 'db' }
+    }
+    if (fresh.malicious === 0 && fresh.suspicious === 0) {
+      return { verdict: 'safe', label: 'No specific threat', threatScore: 0, source: 'db' }
+    }
+    // Mixed fresh evidence -> let heuristics/quick-scan decide.
+    return null
+  }
+  // No fresh data at all (domain not detonated recently). Fall back to the
+  // longer window, but only when a flag decisively dominates (safe reports
+  // from the same window prove the domain is/was legitimate).
+  if (long.total === 0) return null
+  if (long.safe > 0) {
+    // Mixed signals: safe and malicious/suspicious both present -> ambiguous,
+    // let heuristics or quick-scan decide. Old false-positive flags on brand
+    // domains (paypal.com "suspicious" in 2023 + "safe" in 2023) stay null.
+    return null
+  }
+  if (long.malicious > 0) {
+    return { verdict: 'malicious', label: 'Malicious', threatScore: 80, source: 'db' }
+  }
+  if (long.suspicious > 0) {
+    return { verdict: 'suspicious', label: 'Suspicious', threatScore: 50, source: 'db' }
+  }
+  return null
 }
 
 function aggregateSearch(searchData) {
   const reports = searchData?.reports || []
   const nowSeconds = Math.floor(Date.now() / 1000)
-  const recent = reports.filter((r) => r.state === 'SUCCESS' && r.verdict && isRecentId(r.id, nowSeconds))
-  if (recent.length === 0) return null
-
-  let malicious = 0
-  let suspicious = 0
-  let safe = 0
-  for (const rep of recent) {
-    const mapped = verdictFromString(rep.verdict)
-    if (!mapped) continue
-    if (mapped.verdict === 'malicious') malicious += 1
-    else if (mapped.verdict === 'suspicious') suspicious += 1
-    else safe += 1
-  }
-
-  // Trust a flag only when it dominates the recent window (google.com carries
-  // 1 old suspicious report next to several clean ones -> stay safe).
-  if (malicious > 0 && malicious >= safe) {
-    return { verdict: 'malicious', label: 'Malicious', threatScore: 80, source: 'db' }
-  }
-  if (suspicious > 0 && suspicious >= safe) {
-    return { verdict: 'suspicious', label: 'Suspicious', threatScore: 50, source: 'db' }
-  }
-  // No dominant flag in the recent window -> safe, saves scan quota.
-  // But never report "safe" while a recent malicious analysis exists, and
-  // never treat unmapped/"no verdict" reports as clean - they prove nothing.
-  if (malicious + suspicious + safe === 0) return null
-  if (malicious === 0 && recent.length > 0) {
-    return { verdict: 'safe', label: 'No specific threat', threatScore: 0, source: 'db' }
-  }
-  return null
+  const fresh = countVerdicts(reports, nowSeconds, FRESH_WINDOW_SECONDS)
+  const long = countVerdicts(reports, nowSeconds, LONG_WINDOW_SECONDS)
+  return resolveVerdictFromCounts(fresh, long)
 }
 
 // Step 3: free text search - exact URL match in the submitted-samples DB.
@@ -198,22 +230,22 @@ async function searchByTerms(url) {
     method: 'POST',
     headers: { ...apiHeaders(), 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ url }).toString(),
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(25000),
   })
   if (!res.ok) throw new Error(`search/terms failed: ${res.status}`)
   return res.json()
 }
 
-function isRecentTime(iso, nowSeconds) {
+function isRecentTime(iso, nowSeconds, windowSeconds) {
   if (!iso) return false
   const ts = new Date(iso).getTime() / 1000
   if (!Number.isFinite(ts)) return false
-  return nowSeconds - ts <= RECENT_WINDOW_SECONDS
+  return nowSeconds - ts <= windowSeconds
 }
 
 // Exact-URL record aggregation. Only records whose submit_name IS this URL
-// count; verdicts are tallied over the recent window with the same dominance
-// rule as search/hash so legit domains (google.com) stay clean.
+// count; verdicts use the same dual (fresh/long) window rule as search/hash so
+// legit domains (google.com) stay clean.
 function aggregateSearchTerms(data, url) {
   const results = data?.result || []
   const nowSeconds = Math.floor(Date.now() / 1000)
@@ -226,30 +258,42 @@ function aggregateSearchTerms(data, url) {
   }
   const target = normUrl(url)
   const exact = results.filter(
-    (r) => r.verdict && r.submit_name && normUrl(r.submit_name) === target && isRecentTime(r.analysis_start_time, nowSeconds)
+    (r) => r.verdict && r.submit_name && normUrl(r.submit_name) === target
   )
-  if (exact.length === 0) return null
 
-  let malicious = 0
-  let suspicious = 0
-  let safe = 0
-  for (const rep of exact) {
-    const mapped = verdictFromString(rep.verdict)
-    if (!mapped) continue
-    if (mapped.verdict === 'malicious') malicious += 1
-    else if (mapped.verdict === 'suspicious') suspicious += 1
-    else safe += 1
+  const tallyExact = (windowSeconds) => {
+    const out = { malicious: 0, suspicious: 0, safe: 0, total: 0 }
+    for (const rep of exact) {
+      if (!isRecentTime(rep.analysis_start_time, nowSeconds, windowSeconds)) continue
+      const mapped = verdictFromString(rep.verdict)
+      if (!mapped) continue
+      out.total += 1
+      if (mapped.verdict === 'malicious') out.malicious += 1
+      else if (mapped.verdict === 'suspicious') out.suspicious += 1
+      else out.safe += 1
+    }
+    return out
   }
 
-  if (malicious > 0 && malicious >= safe) {
+  const fresh = tallyExact(FRESH_WINDOW_SECONDS)
+  const long = tallyExact(LONG_WINDOW_SECONDS)
+  if (fresh.malicious > 0 && fresh.malicious >= fresh.safe) {
     return { verdict: 'malicious', label: 'Malicious', threatScore: 85, source: 'db' }
   }
-  if (suspicious > 0 && suspicious >= safe) {
+  if (fresh.suspicious > 0 && fresh.suspicious >= fresh.safe) {
     return { verdict: 'suspicious', label: 'Suspicious', threatScore: 50, source: 'db' }
   }
-  if (malicious + suspicious + safe === 0) return null
-  if (malicious === 0 && exact.length > 0) {
+  if (fresh.total > 0 && fresh.malicious === 0 && fresh.suspicious === 0) {
     return { verdict: 'safe', label: 'No specific threat', threatScore: 0, source: 'db' }
+  }
+  // No fresh data: only trust a long-window flag when clean reports are absent
+  // (mixed signals are old false positives on legitimate domains).
+  if (long.safe > 0) return null
+  if (long.malicious > 0) {
+    return { verdict: 'malicious', label: 'Malicious', threatScore: 85, source: 'db' }
+  }
+  if (long.suspicious > 0) {
+    return { verdict: 'suspicious', label: 'Suspicious', threatScore: 50, source: 'db' }
   }
   return null
 }
@@ -260,7 +304,7 @@ async function submitQuickScan(url) {
     method: 'POST',
     headers: { ...apiHeaders(), 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ url, scan_type: 'all' }).toString(),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(25000),
   })
   if (!res.ok) throw new Error(`quick-scan submit failed: ${res.status}`)
   return res.json()
@@ -273,7 +317,7 @@ async function pollQuickScan(scanId) {
     const res = await fetch(`${BASE_URL}/quick-scan/${encodeURIComponent(scanId)}`, {
       method: 'GET',
       headers: apiHeaders(),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(25000),
     })
     if (!res.ok) throw new Error(`quick-scan status failed: ${res.status}`)
     const data = await res.json()
@@ -318,20 +362,96 @@ function aggregateQuickScan(scanData) {
   return null
 }
 
+// Structural/phishing heuristics that need NO external API: raw-IP hosting,
+// unusual ports and tell-tale page paths are statistical dead-ratings on their
+// own, but together they flag pages HA either has no record of or cannot reach
+// (HA quick-scan returned 400 "domain does not exist" for IP-hosted URLs).
+// Kept conservative so legit domains never trip it.
+const PHISHY_PATH_FRAGMENTS = [
+  'reportviewer.aspx',
+  'files.php',
+  'master.php',
+  'invoice.php',
+  'tracking.php',
+  'update-account',
+  'updateaccount',
+  'login.php',
+  'signin.php',
+  'verify.php',
+  'confirm.php',
+  'billing.php',
+  'payment.php',
+  'banking',
+  'webscr',
+  'secure-login',
+  'account-verify',
+  'password-reset',
+]
+const RAW_IP_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
+
+function heuristicVerdict(url) {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname
+
+    const rawIp = RAW_IP_RE.test(host)
+    const unusualPort = Boolean(parsed.port) && parsed.port !== '80' && parsed.port !== '443'
+    const noHttps = parsed.protocol !== 'https:'
+    const pathLower = parsed.pathname.toLowerCase()
+    const phishyPath = PHISHY_PATH_FRAGMENTS.some((p) => pathLower.includes(p))
+    // Obfuscation: heavily percent-encoded values in the query or path.
+    const encodedQuery = (parsed.pathname + parsed.search).match(/%[0-9a-f]{2}/gi) || []
+    const heavyEncoding = encodedQuery.length >= 2
+
+    let score = 0
+    if (rawIp) score += 3
+    if (unusualPort) score += 2
+    if (phishyPath) score += 2
+    if (rawIp && noHttps) score += 1
+    if (heavyEncoding) score += 1
+    // Raw-IP + port is overwhelmingly hosting-rogue content.
+    if (rawIp && unusualPort) score += 2
+
+    if (score >= 6) return { verdict: 'malicious', label: 'Malicious', threatScore: 85, source: 'heuristic' }
+    if (score >= 4) return { verdict: 'suspicious', label: 'Suspicious', threatScore: 60, source: 'heuristic' }
+  } catch {
+    // unparseable URL - never guessed
+  }
+  return null
+}
+
 // Full check pipeline for a single URL: every source runs in PARALLEL so the
 // answer arrives as soon as the fastest conclusive source reports.
 async function checkUrl(url) {
-  const cached = cache.get(url)
+  // Resolve URL shorteners (tinyurl, bit.ly, ...) to the REAL destination first.
+  // Two different short links share the shortener host but point at different
+  // content, so without this the per-host domain cache would give them all the
+  // same verdict and the check would run against the redirect host instead of
+  // the actual page. The verdict therefore reflects what the link really opens.
+  const shortenerInfo = await resolveShortener(url)
+  const targetUrl = shortenerInfo?.resolvedUrl || url
+
+  const cached = cache.get(targetUrl)
   if (cached && Date.now() - cached.checkedAt < CACHE_TTL_MS) {
-    return { url, ...cached }
+    return { url, ...(shortenerInfo && shortenerInfo.resolvedUrl ? { shortener: shortenerInfo } : {}), ...cached }
   }
 
-  // Same-domain reuse: if we already scanned the host recently, share its verdict
-  const host = hostOf(url)
+  // Same-domain reuse: if we already scanned the host recently, share its verdict.
+  // For short links the target host is the resolved destination, so two links
+  // that resolve to the same real domain share a scan - but different targets
+  // are scanned independently.
+  const host = hostOf(targetUrl)
   const hostHit = host && domainCache.get(host)
   if (hostHit && Date.now() - hostHit.checkedAt < DOMAIN_CACHE_TTL_MS) {
-    cache.set(url, { ...hostHit, checkedAt: Date.now() })
-    return { url, verdict: hostHit.verdict, label: hostHit.label, threatScore: hostHit.threatScore, source: hostHit.source }
+    cache.set(targetUrl, { ...hostHit, checkedAt: Date.now() })
+    return {
+      url,
+      ...(shortenerInfo && shortenerInfo.resolvedUrl ? { shortener: shortenerInfo } : {}),
+      verdict: hostHit.verdict,
+      label: hostHit.label,
+      threatScore: hostHit.threatScore,
+      source: hostHit.source,
+    }
   }
 
   const defaultResult = { verdict: 'unknown', label: 'No verdict', threatScore: null, source: null }
@@ -341,23 +461,23 @@ async function checkUrl(url) {
   // quick scan. All three run at the same time; the first conclusive result wins.
   const dbTask = (async () => {
     try {
-      const hashData = await getUrlHash(url)
+      const hashData = await getUrlHash(targetUrl)
       if (hashData?.sha256) {
         const searchData = await searchByHash(hashData.sha256)
         return aggregateSearch(searchData)
       }
     } catch (dbErr) {
-      console.warn(`Hybrid DB lookup failed for ${url}: ${dbErr.message}`)
+      console.warn(`Hybrid DB lookup failed for ${targetUrl}: ${dbErr.message}`)
     }
     return null
   })()
 
   const termsTask = (async () => {
     try {
-      const termsData = await searchByTerms(url)
-      return aggregateSearchTerms(termsData, url)
+      const termsData = await searchByTerms(targetUrl)
+      return aggregateSearchTerms(termsData, targetUrl)
     } catch (termsErr) {
-      console.warn(`Hybrid search/terms failed for ${url}: ${termsErr.message}`)
+      console.warn(`Hybrid search/terms failed for ${targetUrl}: ${termsErr.message}`)
       return null
     }
   })()
@@ -373,14 +493,14 @@ async function checkUrl(url) {
     ])
     if (early) return null // DB answered first - don't burn scan quota
     try {
-      const submitRes = await submitQuickScan(url)
+      const submitRes = await submitQuickScan(targetUrl)
       const scanId = submitRes.id || submitRes.scan_id
       if (scanId) {
         const scanData = await pollQuickScan(scanId)
         return aggregateQuickScan(scanData)
       }
     } catch (scanErr) {
-      console.warn(`Hybrid quick-scan failed for ${url}: ${scanErr.message}`)
+      console.warn(`Hybrid quick-scan failed for ${targetUrl}: ${scanErr.message}`)
     }
     return null
   })()
@@ -409,9 +529,25 @@ async function checkUrl(url) {
       .catch(() => finish(defaultResult))
   })
 
-  cache.set(url, { ...result, checkedAt: Date.now() })
-  if (host) domainCache.set(host, { ...result, checkedAt: Date.now() })
-  return { url, ...result }
+  // Structural heuristics are the safety net whenever the external providers
+  // stay silent (fresh IP-hosted URLs, or while HA quick-scan is unavailable).
+  // They only ever upgrade an unknown verdict, never downgrade a real flag.
+  let finalResult = result
+  if (!isConclusive(result)) {
+    const heuristic = heuristicVerdict(targetUrl)
+    if (heuristic) finalResult = heuristic
+  }
+
+  cache.set(targetUrl, { ...finalResult, checkedAt: Date.now() })
+  if (host) domainCache.set(host, { ...finalResult, checkedAt: Date.now() })
+
+  const out = { url, ...finalResult }
+  // Keep the original short URL visible so the UI can show "shortened link".
+  if (shortenerInfo && shortenerInfo.resolvedUrl) {
+    out.shortener = shortenerInfo
+    out.targetUrl = targetUrl
+  }
+  return out
 }
 
 // Run an async fn over items with a bounded number of in-flight workers.
@@ -440,6 +576,29 @@ export async function checkEmailLinks(emailHtml) {
   }
   const checked = await mapConcurrently(urls, MAX_CONCURRENCY, (url) => checkUrl(url))
   const results = checked.filter(Boolean)
+
+  // Domain intelligence is expensive (up to 6 external lookups per domain), so
+  // it is only fetched for links that actually look dangerous. Links flagged
+  // malicious or suspicious share a domain -> lookup once, apply to all.
+  // Short links are grouped by their REAL target host so two different short
+  // links that resolve to different pages each get their own intelligence.
+  const flagged = results.filter((r) => r.verdict === 'malicious' || r.verdict === 'suspicious')
+  if (flagged.length > 0) {
+    const byHost = new Map()
+    for (const link of flagged) {
+      const key = hostOf(link.targetUrl || link.url)
+      if (!key) continue
+      if (!byHost.has(key)) byHost.set(key, [])
+      byHost.get(key).push(link)
+    }
+    await Promise.all(
+      [...byHost.values()].map(async (group) => {
+        const sample = group[0].url
+        const intel = await getDomainIntel(sample).catch(() => null)
+        for (const link of group) link.domainIntel = intel
+      })
+    )
+  }
 
   const severityRank = { safe: 0, unknown: 1, suspicious: 2, malicious: 3 }
   let highest = 'safe'
