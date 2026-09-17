@@ -602,11 +602,18 @@ function AuthChip({ label, value }) {
 }
 
 // Sender / email OSINT card - shown under the banner when an email is flagged.
-function EmailIntelCard({ intel }) {
+// phishingSeverity = the hybrid-analysis verdict (malicious/suspicious/unknown/
+// safe). It always drives the headline risk: if phishing was detected the risk
+// must NOT read "Low" just because the mail headers look clean.
+function EmailIntelCard({ intel, phishingSeverity }) {
   if (!intel) return null
   const { sender, replyTo, returnPath, senderHeader, auth, sendingIp, senderIp, senderGeo, providerIp, providerHost, providerGeo, geo, flags, spamScore, brandSpoof, senderDomainIntel } = intel
   const score = spamScore || 0
-  const scoreWarn = score >= 4
+  const threatRank = { malicious: 3, suspicious: 2, unknown: 1, safe: 0 }
+  const osintRank = score > 9 ? 3 : score > 5 ? 2 : 1
+  const effectiveRank = Math.max(threatRank[phishingSeverity] || 0, osintRank)
+  const riskLabel = effectiveRank >= 3 ? 'High' : effectiveRank === 2 ? 'Medium' : 'Low'
+  const scoreWarn = effectiveRank >= 2
   const geoParts = (geo || senderGeo) ? [senderGeo?.city, senderGeo?.region, senderGeo?.country_name].filter(Boolean).join(', ') : null
   const providerParts = providerGeo ? [providerGeo.city, providerGeo.region, providerGeo.country_name].filter(Boolean).join(', ') : null
   const senderWhois = senderDomainIntel?.whois
@@ -619,7 +626,7 @@ function EmailIntelCard({ intel }) {
         </Typography>
         <Chip
           size="small"
-          label={`Risk ${score > 9 ? 'High' : score > 5 ? 'Medium' : 'Low'} · ${score}`}
+          label={`Risk ${riskLabel}${score ? ` · ${score}` : ''}`}
           sx={{
             ml: 'auto', height: 20, fontSize: '0.62rem', fontWeight: 700,
             bgcolor: scoreWarn ? 'rgba(248,113,113,0.15)' : 'rgba(52,211,153,0.12)',
@@ -850,7 +857,7 @@ export default function EmailDetail({ emailId, email, onBack }) {
       {(securityLoading || security) && <SecurityBanner banner={banner} loading={securityLoading} />}
 
       {!securityLoading && security?.emailIntel && (
-        <EmailIntelCard intel={security.emailIntel} />
+        <EmailIntelCard intel={security.emailIntel} phishingSeverity={security.summary?.highestSeverity || security.summary?.verdict} />
       )}
 
       {!securityLoading && securityError && (
