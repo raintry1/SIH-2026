@@ -33,6 +33,9 @@ import {
   ExpandLessOutlined,
   DomainOutlined,
   LanguageOutlined,
+  MailOutlineOutlined,
+  FlagOutlined,
+  GppBadOutlined,
 } from '@mui/icons-material'
 import DOMPurify from 'dompurify'
 import { fetchEmailDetail, checkEmailLinks } from '../api/gmailApi'
@@ -374,9 +377,52 @@ function DomainInfoHeader({ intel }) {
 
 function WhoisSection({ data }) {
   if (!data) return null
+  const registrant = data.registrant
+  const regAddr = registrant?.address
+  const regLocation = [
+    regAddr?.city,
+    regAddr?.state,
+    regAddr?.country,
+  ]
+    .filter(Boolean)
+    .join(', ')
   return (
     <IntelSection icon={DomainOutlined} title="WHOIS & Registration">
+      {registrant && (
+        <>
+          {!registrant.redacted && registrant.organization && (
+            <IntelKeyValue label="Registrant Org" value={registrant.organization} />
+          )}
+          {!registrant.redacted && registrant.name && registrant.name !== 'REDACTED REGISTRANT' && (
+            <IntelKeyValue label="Registrant" value={registrant.name} />
+          )}
+          {!registrant.redacted && regLocation && (
+            <IntelKeyValue label="Registrant Location" value={regLocation} />
+          )}
+          {registrant.redacted && (
+            <Typography variant="caption" className="block mb-1" sx={{ color: '#64748b' }}>
+              Registrant details redacted by the registrar (privacy/GDPR).
+            </Typography>
+          )}
+        </>
+      )}
       <IntelKeyValue label="Registrar" value={data.registrar} />
+      {data.registrarIanaId && <IntelKeyValue label="Registrar IANA ID" value={data.registrarIanaId} />}
+      {data.registrarUrl && (
+        <IntelKeyValue
+          label="Registrar URL"
+          value={
+            <Link href={data.registrarUrl} target="_blank" rel="noopener noreferrer" sx={{ color: '#818cf8' }}>
+              {data.registrarUrl}
+            </Link>
+          }
+        />
+      )}
+      {data.abuseEmail && (
+        <Typography variant="caption" className="block" sx={{ color: '#94a3b8', mb: 0.5 }}>
+          Abuse contact: <span className="font-mono" style={{ color: '#e2e8f0' }}>{data.abuseEmail}</span>
+        </Typography>
+      )}
       <IntelKeyValue label="Created" value={data.created} />
       <IntelKeyValue label="Updated" value={data.updated} />
       <IntelKeyValue label="Expires" value={data.expires} />
@@ -389,6 +435,13 @@ function WhoisSection({ data }) {
       )}
       {data.nameservers && data.nameservers.length > 0 && (
         <IntelKeyValue label="Nameservers" value={data.nameservers.join(', ')} mono />
+      )}
+      {data.dnssec != null && (
+        <IntelKeyValue
+          label="DNSSEC"
+          value={data.dnssec ? 'Signed' : 'Not signed'}
+          warn={!data.dnssec}
+        />
       )}
       {data.status && data.status.length > 0 && (
         <IntelKeyValue label="Status" value={data.status.join(', ')} />
@@ -524,6 +577,152 @@ function DomainIntelCard({ intel }) {
   )
 }
 
+const SEVERITY_COLORS = {
+  high: { label: '#f87171', bg: 'rgba(248,113,113,0.12)', border: 'rgba(248,113,113,0.3)' },
+  medium: { label: '#fbbf24', bg: 'rgba(251,191,36,0.1)', border: 'rgba(251,191,36,0.3)' },
+  low: { label: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.2)' },
+}
+
+function AuthChip({ label, value }) {
+  if (!value) return null
+  const pass = value === 'pass'
+  const bad = value === 'fail'
+  return (
+    <Chip
+      size="small"
+      label={`${label}: ${value.toUpperCase()}`}
+      sx={{
+        height: 20, fontSize: '0.62rem', fontWeight: 700,
+        bgcolor: bad ? 'rgba(248,113,113,0.15)' : pass ? 'rgba(52,211,153,0.12)' : 'rgba(251,191,36,0.12)',
+        color: bad ? '#f87171' : pass ? '#34d399' : '#fbbf24',
+        border: `1px solid ${bad ? 'rgba(248,113,113,0.3)' : pass ? 'rgba(52,211,153,0.3)' : 'rgba(251,191,36,0.3)'}`,
+      }}
+    />
+  )
+}
+
+// Sender / email OSINT card - shown under the banner when an email is flagged.
+function EmailIntelCard({ intel }) {
+  if (!intel) return null
+  const { sender, replyTo, returnPath, senderHeader, auth, sendingIp, geo, flags, spamScore, brandSpoof, senderDomainIntel } = intel
+  const score = spamScore || 0
+  const scoreWarn = score >= 4
+  const geoParts = geo ? [geo.city, geo.region, geo.country_name].filter(Boolean).join(', ') : null
+  const senderWhois = senderDomainIntel?.whois
+  return (
+    <Box className="mt-3 mb-1 p-3 rounded-xl" sx={{ bgcolor: 'rgba(248,113,113,0.04)', border: '1px solid rgba(248,113,113,0.22)' }}>
+      <Box className="flex items-center gap-2 mb-1">
+        <MailOutlineOutlined sx={{ color: '#f87171', fontSize: 16 }} />
+        <Typography variant="caption" fontWeight={700} sx={{ color: '#fca5a5' }}>
+          Sender Intelligence (OSINT)
+        </Typography>
+        <Chip
+          size="small"
+          label={`Risk ${score > 9 ? 'High' : score > 5 ? 'Medium' : 'Low'} · ${score}`}
+          sx={{
+            ml: 'auto', height: 20, fontSize: '0.62rem', fontWeight: 700,
+            bgcolor: scoreWarn ? 'rgba(248,113,113,0.15)' : 'rgba(52,211,153,0.12)',
+            color: scoreWarn ? '#f87171' : '#34d399',
+            border: `1px solid ${scoreWarn ? 'rgba(248,113,113,0.3)' : 'rgba(52,211,153,0.3)'}`,
+          }}
+        />
+      </Box>
+
+      <Box className="mb-1.5">
+        <Typography variant="caption" fontWeight={600} sx={{ color: '#e2e8f0' }}>
+          {intel.sender?.name || '(no display name)'}
+        </Typography>
+        <Typography variant="caption" className="block font-mono break-all" sx={{ color: '#cbd5e1' }}>
+          {intel.sender?.email || 'unknown sender'}
+        </Typography>
+      </Box>
+
+      {(flags || []).length > 0 && (
+        <Box className="mb-1.5">
+          {flags.map((f, i) => {
+            const c = SEVERITY_COLORS[f.severity] || SEVERITY_COLORS.medium
+            return (
+              <Box
+                key={i}
+                className="flex items-start gap-1.5 px-2 py-1 mb-1 rounded-lg"
+                sx={{ bgcolor: c.bg, border: `1px solid ${c.border}` }}
+              >
+                <FlagOutlined sx={{ color: c.label, fontSize: 13, mt: 0.3 }} />
+                <Box className="min-w-0">
+                  <Typography variant="caption" fontWeight={600} sx={{ color: c.label }} className="block">
+                    {f.label}
+                  </Typography>
+                  {f.detail && (
+                    <Typography variant="caption" className="block break-all" sx={{ color: '#94a3b8' }}>
+                      {f.detail}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+            )
+          })}
+        </Box>
+      )}
+
+      <IntelSection icon={LockOutlined} title="Authentication">
+        <Box className="flex gap-1.5 flex-wrap">
+          <AuthChip label="SPF" value={auth?.spf} />
+          <AuthChip label="DKIM" value={auth?.dkim} />
+          <AuthChip label="DMARC" value={auth?.dmarc} />
+        </Box>
+        {auth?.dkimSignatures && (
+          <IntelKeyValue label="DKIM Signature" value={auth.dkimSignatures.join('; ')} mono />
+        )}
+        {replyTo && <IntelKeyValue label="Reply-To" value={`${replyTo.name ? replyTo.name + ' ' : ''}${replyTo.email}`} mono />}
+        {returnPath?.email && <IntelKeyValue label="Return-Path" value={returnPath.email} mono />}
+        {senderHeader?.email && <IntelKeyValue label="Sender" value={senderHeader.email} mono />}
+        {intel.messageId && <IntelKeyValue label="Message-ID" value={intel.messageId} mono />}
+      </IntelSection>
+
+      <IntelSection icon={LocationOnOutlined} title="Sending Origin">
+        {sendingIp && <IntelKeyValue label="Sending IP" value={sendingIp} mono />}
+        {geoParts && <IntelKeyValue label="Location" value={geoParts} />}
+        {geo?.country_code && <IntelKeyValue label="Country" value={`${geo.country_code}  (${geo.country_name || ''})`} />}
+        {geo?.connection?.isp && <IntelKeyValue label="ISP" value={geo.connection.isp} />}
+        {geo?.connection?.asn && <IntelKeyValue label="ASN" value={String(geo.connection.asn)} />}
+        {geo?.security?.proxy || geo?.security?.tor ? (
+          <IntelKeyValue label="Anonymizer" value={geo.security.proxy ? 'Proxy/VPN' : geo.security.tor ? 'Tor exit' : 'Yes'} warn />
+        ) : null}
+      </IntelSection>
+
+      {senderDomainIntel && (
+        <IntelSection icon={DomainOutlined} title="Sender Domain">
+          <IntelKeyValue label="Domain" value={senderDomainIntel.registrableDomain || sender?.domain} mono />
+          {senderDomainIntel.hosting && (
+            <IntelKeyValue label="Hosting" value={senderDomainIntel.hosting.platform} />
+          )}
+          {senderWhois?.registrar && <IntelKeyValue label="Registrar" value={senderWhois.registrar} />}
+          {senderWhois?.domainAgeDays != null && (
+            <IntelKeyValue
+              label="Domain Age"
+              value={`${Math.floor(senderWhois.domainAgeDays / 365)}y ${senderWhois.domainAgeDays % 365}d`}
+              warn={senderWhois.domainAgeDays < 180}
+            />
+          )}
+          {senderWhois?.registrant && !senderWhois.registrant.redacted && (
+            <>
+              {senderWhois.registrant.organization && (
+                <IntelKeyValue label="Registrant Org" value={senderWhois.registrant.organization} />
+              )}
+              {senderWhois.registrant.address?.state && (
+                <IntelKeyValue label="State" value={senderWhois.registrant.address.state} />
+              )}
+              {senderWhois.registrant.address?.country && (
+                <IntelKeyValue label="Country" value={senderWhois.registrant.address.country} />
+              )}
+            </>
+          )}
+        </IntelSection>
+      )}
+    </Box>
+  )
+}
+
 export default function EmailDetail({ emailId, email, onBack }) {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -639,6 +838,10 @@ export default function EmailDetail({ emailId, email, onBack }) {
       </Typography>
 
       {(securityLoading || security) && <SecurityBanner banner={banner} loading={securityLoading} />}
+
+      {!securityLoading && security?.emailIntel && (
+        <EmailIntelCard intel={security.emailIntel} />
+      )}
 
       {!securityLoading && securityError && (
         <Alert severity="warning" className="mb-4" sx={{ borderRadius: 3 }}>

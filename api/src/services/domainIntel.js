@@ -192,9 +192,122 @@ export async function resolveShortener(url) {
 
 // ---- Individual lookups ----------------------------------------------------
 
-// WHOIS via who-dat first (clean JSON), falling back to RDAP via airat.top for
-// domains who-dat rejects (e.g. foo.app where the suffix IS the domain).
+// IANA-published map of TLD -> authoritative RDAP server. Loaded once and
+// cached for a day so each WHOIS query hits the right registry directly.
+let rdapBootstrap = null
+let rdapBootstrapAt = 0
+const RDAP_BOOTSTRAP_TTL_MS = 24 * 60 * 60 * 1000
+
+async function getRdapServers() {
+  if (
+    rdapBootstrap &&
+    Date.now() - rdapBootstrapAt < RDAP_BOOTSTRAP_TTL_MS
+  ) return rdapBootstrap
+  const res = await fetch('https://data.iana.org/rdap/dns.json', {
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!res.ok) throw new Error(`RDAP bootstrap HTTP ${res.status}`)
+  const boot = await res.json()
+  const map = new Map() // tld -> authoritative base url
+  for (const [tlds, servers] of boot.services || []) {
+    const base = servers?.[0]
+    if (!base) continue
+    for (const t of tlds) if (!map.has(t)) map.set(t, base)
+  }
+  rdapBootstrap = map
+  rdapBootstrapAt = Date.now()
+  return map
+}
+
+// Parse one RDAP vcardArray entity list into useful fields.
+function parseRdapEntity(e) {
+  if (!e) return null
+  const v = e.vcardArray?.[1] || []
+  const get = (name) => {
+    const f = v.find((r) => r[0] === name)
+    const val = f?.[3]
+    if (val === undefined || val === null) return null
+    return Array.isArray(val)
+      ? val.filter((x) => x && x !== '').join('')
+      : String(val).trim() || null
+  }
+  const adrArr = v.find((r) => r[0] === 'adr')?.[3]
+  const adr =
+    Array.isArray(adrArr) && adrArr.length >= 7
+      ? { street: adrArr[2] || null, city: adrArr[3] || null, state: adrArr[4] || null, zip: adrArr[5] || null, country: adrArr[6] || null }
+      : null
+  return {
+    roles: Array.isArray(e.roles) ? e.roles : [],
+    fn: get('fn'),
+    org: get('org'),
+    email: get('email'),
+    tel: get('tel'),
+    adr,
+  }
+}
+
+// Authoritative registry RDAP -> find the registrar's OWN RDAP server via the
+// "related" link the registry exposes (e.g. Verisign points at rdap.markmonitor.com).
+async function lookupRegistrarRdap(domain, authRdap) {
+  if (!authRdap) return null
+  let related = null
+  for (const l of authRdap.links || []) {
+    // The registry points at the registrar's RDAP via the "related" link - the
+    // host may carry rdap (opensrs.rdap.tucows.com) or the path may (/rdap/).
+    if (l.rel === 'related' && /rdap/i.test(l.href) && !/q=/i.test(l.href)) {
+      related = l.href
+      break
+    }
+  }
+  if (!related) return null
+  const regDomainIdx = related.lastIndexOf('/domain/')
+  let base = regDomainIdx > 0 ? related.slice(0, regDomainIdx + 1) : related
+  if (!base.endsWith('/')) base += '/'
+  try {
+    const res = await fetch(`${base}domain/${encodeURIComponent(domain)}`, {
+      headers: { accept: 'application/rdap+json', 'user-agent': 'Mozilla/5.0 (SIH Security Scanner)' },
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    })
+    if (!res.ok) return null
+    return res.json()
+  } catch {
+    return null
+  }
+}
+
+// Primary WHOIS path: authoritative RDAP (via the IANA bootstrap) for the REAL
+// registry record, then the registrar's own RDAP when exposed for registrant
+// details. Falls back to who-dat only when RDAP is unavailable for the TLD.
 async function lookupWhois(domain) {
+  let servers
+  let bootstrapErr = null
+  try {
+    servers = await getRdapServers()
+  } catch (e) {
+    bootstrapErr = e
+  }
+
+  const tld = domain.split('.').pop().toLowerCase()
+  const base = servers?.get(tld)
+
+  if (base) {
+    try {
+      const res = await fetch(`${base}domain/${encodeURIComponent(domain)}`, {
+        headers: { accept: 'application/rdap+json', 'user-agent': 'Mozilla/5.0 (SIH Security Scanner)' },
+        signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+      })
+      if (res.status === 404) return null // unregistered or unresolvable
+      if (res.ok) {
+        const authRdap = await res.json()
+        const registrarRdap = await lookupRegistrarRdap(domain, authRdap)
+        return { source: 'rdap', data: authRdap, registrarData: registrarRdap }
+      }
+    } catch {
+      /* fall through to who-dat */
+    }
+  }
+
+  // Fallback for TLDs without RDAP coverage: who-dat, then airat.top.
   try {
     const res = await fetch(`https://who-dat.as93.net/${encodeURIComponent(domain)}`, {
       headers: { accept: 'application/json' },
@@ -202,10 +315,12 @@ async function lookupWhois(domain) {
     })
     if (res.ok) {
       const data = await res.json()
-      if (data?.isRegistered !== false && data?.registrar) return { source: 'who-dat', data }
+      if (data?.isRegistered !== false && data?.registrar) {
+        return { source: 'who-dat', data }
+      }
     }
   } catch {
-    /* fall through to RDAP */
+    /* fall through to airat */
   }
   const rdapRes = await fetch(`https://whois.api.airat.top/?domain=${encodeURIComponent(domain)}`, {
     headers: { accept: 'application/json' },
@@ -214,7 +329,7 @@ async function lookupWhois(domain) {
   if (!rdapRes.ok) throw new Error(`whois HTTP ${rdapRes.status}`)
   const rdap = await rdapRes.json()
   if (!rdap?.rdap?.registrar) return null
-  return { source: 'rdap', data: rdap.rdap }
+  return { source: 'rdap', data: rdap.rdap, registrarData: null, bootstrapErr }
 }
 
 async function lookupDns(domain) {
@@ -308,22 +423,113 @@ function domainAgeDays(createdIso) {
   return Math.max(0, Math.floor((Date.now() - t) / (1000 * 60 * 60 * 24)))
 }
 
-// Shape WHOIS into a compact viewModel. Handles who-dat's flat format AND the
-// RDAP shape returned by airat.top.
+// Shape WHOIS into a compact viewModel. Handles:
+//   - authoritative RDAP (+ optional registrar RDAP) — richest, incl. registrar PII
+//   - who-dat's flat format and the airat.top RDAP shape (fallbacks)
 function shapeWhois(entry) {
   if (!entry?.data) return null
   const d = entry.data
 
   let registrar = null
+  let registrarIanaId = null
+  let registrarUrl = null
+  let abuseEmail = null
+  let abusePhone = null
   let created = null
   let updated = null
   let expires = null
   let nameservers = null
   let status = null
+  let dnssec = null
   let registrant = null
+  let redacted = true
 
-  if (entry.source === 'who-dat') {
+  if (entry.source === 'rdap' && Array.isArray(d.entities)) {
+    // Authoritative registry RDAP.
+    registrar = d?.registrar?.name || null
+    registrarIanaId = String(d?.registrar?.ianaId || d?.registrar?.handle || '')
+    registrarUrl = d?.registrar?.url || null
+    nameservers = Array.isArray(d?.nameservers)
+      ? d.nameservers
+          .map((n) => String(n?.ldhName || n).toLowerCase().replace(/\.$/, ''))
+          .filter(Boolean)
+      : null
+    status = Array.isArray(d?.status) ? d.status : d?.status ? [String(d.status)] : null
+    dnssec = d?.secureDNS ? Boolean(d.secureDNS.delegationSigned) : null
+    // RDAP events: registration / expiration / last changed
+    for (const ev of d?.events || []) {
+      if (ev?.eventAction === 'registration') created = ev.eventDate
+      else if (ev?.eventAction === 'expiration') expires = ev.eventDate
+      else if (ev?.eventAction === 'last changed') updated = ev.eventDate
+    }
+    for (const e of d.entities) {
+      const ent = parseRdapEntity(e)
+      if (!ent) continue
+      if (ent.roles.includes('registrant')) {
+        registrant = {
+          name: ent.fn,
+          organization: ent.org,
+          email: ent.email,
+          phone: ent.tel,
+          address: ent.adr,
+          redacted: !ent.org && !ent.fn,
+        }
+        if (registrant.redacted && (ent.fn || ent.org)) registrant.redacted = false
+        if (ent.fn || ent.org || ent.email || ent.tel || ent.adr) redacted = false
+      } else if (ent.roles.includes('registrar')) {
+        registrar = ent.org || ent.fn || registrar
+        registrarUrl = registrarUrl || findLink(e, 'about')
+        for (const sub of e.entities || []) {
+          const subEnt = parseRdapEntity(sub)
+          if (subEnt?.roles.includes('abuse')) {
+            abuseEmail = subEnt.email || abuseEmail
+            abusePhone = subEnt.tel || abusePhone
+          }
+        }
+      }
+    }
+
+    // Enrich registrant from the registrar's OWN RDAP when the registry one is
+    // redacted - registries （Verisign etc.) hide the org that the registrar
+    // still publishes.
+    const reg = entry.registrarData
+    if (reg && Array.isArray(reg.entities)) {
+      for (const e of reg.entities) {
+        const ent = parseRdapEntity(e)
+        if (!ent) continue
+        if (ent.roles.includes('registrant') && (!registrant?.organization || registrant.redacted)) {
+          const hasData = ent.org || ent.fn || ent.adr
+          if (hasData) {
+            const addrPresent = ent.adr && Object.values(ent.adr).some((v) => v)
+            registrant = {
+              name: ent.fn,
+              organization: ent.org,
+              email: ent.email,
+              phone: ent.tel,
+              address: ent.adr,
+              redacted: !ent.org && !ent.fn && !addrPresent,
+            }
+          }
+        }
+        if (ent.roles.includes('registrar') && e.entities) {
+          for (const sub of e.entities) {
+            const subEnt = parseRdapEntity(sub)
+            if (subEnt?.roles.includes('abuse')) {
+              abuseEmail = abuseEmail || subEnt.email
+              abusePhone = abusePhone || subEnt.tel
+            }
+          }
+        }
+      }
+    }
+    if (!abuseEmail && d?.registrar?.abuseEmail) abuseEmail = d.registrar.abuseEmail
+    if (registrant) redacted = Boolean(registrant.redacted)
+  } else if (entry.source === 'who-dat') {
     registrar = d?.registrar?.name || d?.registrar || null
+    registrarIanaId = d?.registrar?.ianaId ? String(d.registrar.ianaId) : ''
+    registrarUrl = d?.registrar?.url || null
+    abuseEmail = d?.registrar?.abuseEmail || null
+    abusePhone = d?.registrar?.abusePhone || null
     created = d?.dates?.created || d?.creation_date || d?.created_date || null
     updated = d?.dates?.updated || d?.updated_date || null
     expires = d?.dates?.expires || d?.expiration_date || d?.registry_expiry_date || null
@@ -331,10 +537,11 @@ function shapeWhois(entry) {
       ? d.nameservers.map((n) => (typeof n === 'string' ? n.toLowerCase().replace(/\.$/, '') : n?.name?.toLowerCase().replace(/\.$/, ''))).filter(Boolean)
       : null
     status = Array.isArray(d?.status) ? d.status : d?.status ? [String(d.status)] : null
-    // who-dat hides PII by default
+    dnssec = d?.dnssec ? Boolean(d.dnssec.signed) : null
   } else {
-    // RDAP
+    // airat.top RDAP fallback
     registrar = d?.registrar?.name || null
+    registrarIanaId = String(d?.registrar?.ianaId || '')
     created = d?.events?.registration || d?.events?.created || null
     updated = d?.events?.lastChanged || d?.events?.lastUpdate || null
     expires = d?.events?.expiration || d?.events?.expires || null
@@ -342,19 +549,30 @@ function shapeWhois(entry) {
       ? d.nameservers.map((n) => String(n).toLowerCase().replace(/\.$/, ''))
       : null
     status = Array.isArray(d?.status) ? d.status : d?.status ? [String(d.status)] : null
-    registrant = null
+    dnssec = d?.dnssecSigned != null ? Boolean(d.dnssecSigned) : null
   }
 
   return {
     registrar,
+    registrarIanaId: registrarIanaId || null,
+    registrarUrl,
+    abuseEmail,
+    abusePhone,
     registrant,
+    registrantRedacted: redacted,
     created: cleanDate(created),
     updated: cleanDate(updated),
     expires: cleanDate(expires),
     domainAgeDays: domainAgeDays(created),
     nameservers: nameservers && nameservers.length > 0 ? nameservers.slice(0, 8) : null,
     status: status && status.length > 0 ? status.slice(0, 6) : null,
+    dnssec,
   }
+}
+
+function findLink(entity, rel) {
+  for (const l of entity?.links || []) if (l.rel === rel) return l.href || null
+  return null
 }
 
 function shapeDns(raw) {

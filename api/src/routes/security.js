@@ -3,6 +3,7 @@ import { verifyFirebaseToken } from '../middleware/auth.js'
 import { getEmail, getAttachmentBytes } from '../services/gmail.js'
 import { checkEmailLinks } from '../services/phishing.js'
 import { checkEmailAttachments } from '../services/filecheck.js'
+import { buildEmailIntel } from '../services/emailIntel.js'
 
 const router = Router()
 
@@ -55,6 +56,7 @@ router.post('/check', async (req, res) => {
     const email = await getEmail(accessToken, emailId)
     const bodyHtml = email?.bodyHtml || ''
     const attachments = email?.attachments || []
+    const headers = email?.headers || []
 
     // Links and attachments are scanned in PARALLEL - worst case time drops
     // from links+files to max(links, files).
@@ -65,10 +67,20 @@ router.post('/check', async (req, res) => {
       ),
     ])
 
+    const combined = combineSummaries(linkResult.summary, fileResult.summary)
+    const hasPhishing =
+      combined.highestSeverity === 'malicious' ||
+      combined.highestSeverity === 'suspicious'
+
+    // Email sender OSINT: only computed for emails flagged as suspicious or
+    // malicious to avoid wasting free API quota on safe emails.
+    const emailIntel = hasPhishing ? await buildEmailIntel(headers).catch(() => null) : null
+
     res.json({
       links: linkResult.links,
       attachments: fileResult.attachments,
-      summary: combineSummaries(linkResult.summary, fileResult.summary),
+      summary: combined,
+      ...(emailIntel ? { emailIntel } : {}),
     })
   } catch (err) {
     console.error('security check error:', err.message)

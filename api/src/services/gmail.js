@@ -143,11 +143,21 @@ export async function getEmail(accessToken, id) {
   const headers = msg.payload?.headers || []
   const body = extractBody(msg.payload?.parts)
   const message = mapMessage(msg)
+
+  // All raw headers, exposed for sender/spoof OSINT. Multi-valued headers
+  // (Received, Authentication-Results, etc.) keep every line as separate
+  // entries so the downstream parsers can iterate them.
+  const rawHeaders = headers.map((h) => ({
+    name: h.name,
+    value: h.value,
+  }))
+
   return {
     ...message,
     internalDate: msg.internalDate,
     labelIds: msg.labelIds || [],
     attachments: extractAttachments(msg.payload?.parts),
+    headers: rawHeaders,
     ...body,
   }
 }
