@@ -126,28 +126,103 @@ function parseDkimSignatures(headers) {
   return out
 }
 
-// First external (non-local, non-google, non-compromised) Received hop IP.
-const SKIP_PREFIXES = ['10.', '127.', '192.168.', '172.16.', '172.31.', '209.85.', 'fwd', 'by mx.google.com', 'from server']
+// Received-chain parsing.
+//
+// Headers arrive in message order: the FIRST Received line is the NEWEST hop
+// (added by the receiving side, e.g. mx.google.com) and the LAST is the OLDEST
+// (the very first hop made by the sender's mail client / server).
+//   - senderIp: the IP on the OLDEST hop = the real sending host.
+//   - providerIp: the last external MTA that handed the mail to Gmail = the
+//     sending mail-service provider's server (e.g. an AWS/Mailchimp/Serverless
+//     edge). We pick the first public IP going from the newest hop down past
+//     Google's own ranges.
 
-function firstExternalIp(headers) {
-  // Received order: newest first (Gmail) or oldest first (raw). Try newest->oldest
-  // and pick the first public IPv4, skipping Gmail per-hop hops.
-  for (const received of getAllHeaders(headers, 'Received')) {
-    const ips = received.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g)
-    if (!ips) continue
-    for (const ip of ips) {
-      const parts = ip.split('.').map(Number)
-      const privateIp =
-        parts[0] === 10 ||
-        parts[0] === 127 ||
-        (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
-        (parts[0] === 192 && parts[1] === 168)
-      if (privateIp) continue
-      if (parts[0] === 209 && parts[1] === 85) continue // Google egress
-      return ip
+const GOOGLE_IP_RANGES = new Set([
+  '34.', '35.', '64.233.', '66.102.', '66.249.', '72.14.', '74.125.',
+  '104.154.', '104.196.', '142.250.', '172.217.', '173.194.', '209.85.',
+  '216.58.', '216.239.',
+])
+
+function isPublicIp(ip) {
+  if (!ip) return false
+  const parts = ip.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return false
+  if (
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    parts[0] === 0 ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 169 && parts[1] === 254) ||
+    (parts[0] >= 224 && parts[0] <= 255)
+  ) return false
+  return true
+}
+
+function isGoogleIp(ip) {
+  if (!ip) return false
+  for (const prefix of GOOGLE_IP_RANGES) if (ip.startsWith(prefix)) return true
+  return false
+}
+
+// Split one Received line into the IPs seen before/after "by". Returns the
+// from-IP and by-IP if present.
+function parseReceivedHop(line) {
+  const byIdx = line.toLowerCase().indexOf(' by ')
+  const fromPart = byIdx > 0 ? line.slice(0, byIdx) : line
+  const byPart = byIdx > 0 ? line.slice(byIdx + 4) : ''
+  const ips = (s) => (s.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [])
+  return {
+    from: ips(fromPart),
+    by: ips(byPart),
+  }
+}
+
+// [[senderIp, senderHost], providerIp, providerHost]
+function extractIps(headers) {
+  const hopIps = getAllHeaders(headers, 'Received').map(parseReceivedHop)
+  // hopIps[0] = newest (Gmail), hopIps[last] = oldest (origin).
+  let senderIp = null
+  let providerIp = null
+  let providerHost = null
+  for (let i = hopIps.length - 1; i >= 0 && !senderIp; i--) {
+    for (const ip of hopIps[i].from) {
+      if (isPublicIp(ip) && !isGoogleIp(ip)) {
+        senderIp = ip
+        break
+      }
     }
   }
-  return null
+  for (let i = 0; i < hopIps.length && !providerIp; i++) {
+    for (const ip of hopIps[i].from) {
+      if (isPublicIp(ip) && !isGoogleIp(ip)) {
+        providerIp = ip
+        break
+      }
+    }
+  }
+  // Gmail sends with a "Received: from mail-x.google.com (mail-x.google.com.
+  // [IP]) by mx.google.com". The provider hostname that handed mail to Gmail
+  // is the from-clause token on the newest Received line.
+  if (hopIps.length) {
+    const newest = getAllHeaders(headers, 'Received')[0]
+    const m = newest.match(/from\s+([A-Za-z0-9._-]+(?:\.[A-Za-z0-9._-]+)*)/i)
+    if (m) {
+      const host = m[1]
+      providerHost = host === 'unknown' || host === 'fwd' || host === 'localhost' || isGoogleIp(host)
+        ? null
+        : host
+    }
+  }
+  return { senderIp, providerIp, providerHost }
+}
+
+function firstExternalIp(headers) {
+  // Kept for compatibility with the older single-IP consumers (geo lookup for
+  // the sender). Prefer extractIps().senderIp in new code.
+  if (!Array.isArray(headers)) return null
+  const { senderIp } = extractIps(headers)
+  return senderIp
 }
 
 async function lookupIpGeo(ip) {
@@ -259,9 +334,10 @@ async function gather(headers) {
     })
   }
 
-  const sendingIp = firstExternalIp(headers)
-  const [geo, senderIntel] = await Promise.all([
-    sendingIp ? lookupIpGeo(sendingIp).catch(() => null) : Promise.resolve(null),
+  const { senderIp, providerIp, providerHost } = extractIps(headers)
+  const [geo, providerGeo, senderIntel] = await Promise.all([
+    senderIp ? lookupIpGeo(senderIp).catch(() => null) : Promise.resolve(null),
+    providerIp && providerIp !== senderIp ? lookupIpGeo(providerIp).catch(() => null) : Promise.resolve(null),
     fromDomain ? getDomainIntel(`https://${fromDomain}/`).catch(() => null) : Promise.resolve(null),
   ])
 
@@ -302,7 +378,12 @@ async function gather(headers) {
     messageId,
     date,
     subject,
-    sendingIp,
+    sendingIp: senderIp,
+    senderIp,
+    senderGeo: geo,
+    providerIp,
+    providerHost,
+    providerGeo,
     geo,
     senderDomainIntel: senderIntel,
     flags,

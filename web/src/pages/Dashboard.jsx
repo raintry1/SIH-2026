@@ -1,10 +1,10 @@
-import { useState } from 'react'
-import { useMediaQuery, useTheme, Box, Typography } from '@mui/material'
+import { useState, useEffect } from 'react'
+import { useMediaQuery, useTheme, Box, Typography, Alert, AlertTitle, Button } from '@mui/material'
 import Layout from '../components/Layout'
 import EmailList from '../components/EmailList'
 import EmailDetail from '../components/EmailDetail'
 import GmailConnector from '../components/GmailConnector'
-import { hasGmailToken } from '../auth/authService'
+import { hasGmailToken, clearTokens } from '../auth/authService'
 import { MarkEmailReadOutlined } from '@mui/icons-material'
 
 export default function Dashboard({ user }) {
@@ -12,6 +12,25 @@ export default function Dashboard({ user }) {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const [selectedId, setSelectedId] = useState(null)
   const [selectedEmail, setSelectedEmail] = useState(null)
+  // Tick so an expired/revoked Gmail token (cleared by the API interceptor)
+  // immediately flips us back to the "Connect Gmail" screen.
+  const [tokenVersion, setTokenVersion] = useState(0)
+  const [scopeError, setScopeError] = useState(null)
+
+  useEffect(() => {
+    const handler = () => {
+      setSelectedId(null)
+      setSelectedEmail(null)
+      setTokenVersion((v) => v + 1)
+    }
+    const scopeHandler = (e) => setScopeError(e.detail || 'Gmail scope missing')
+    window.addEventListener('gmail-token-deleted', handler)
+    window.addEventListener('gmail-scope-missing', scopeHandler)
+    return () => {
+      window.removeEventListener('gmail-token-deleted', handler)
+      window.removeEventListener('gmail-scope-missing', scopeHandler)
+    }
+  }, [])
 
   const handleSelect = (id, email) => {
     setSelectedId(id)
@@ -19,6 +38,30 @@ export default function Dashboard({ user }) {
   }
 
   const handleBack = () => setSelectedId(null)
+
+  if (scopeError) {
+    return (
+      <Layout user={user}>
+        <Box className="p-6 max-w-xl mx-auto mt-10">
+          <Alert severity="warning" sx={{ borderRadius: 3 }}>
+            <AlertTitle>Gmail scope missing</AlertTitle>
+            {scopeError}
+          </Alert>
+          <Button
+            variant="outlined"
+            sx={{ mt: 2 }}
+            onClick={() => {
+              clearTokens()
+              setScopeError(null)
+              window.dispatchEvent(new CustomEvent('gmail-token-deleted'))
+            }}
+          >
+            Re-connect Gmail
+          </Button>
+        </Box>
+      </Layout>
+    )
+  }
 
   if (!hasGmailToken()) {
     return (

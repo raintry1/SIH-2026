@@ -5,7 +5,7 @@ import { google } from 'googleapis'
 function getGmailClient(accessToken) {
   if (!accessToken) {
     const err = new Error('Missing Gmail access token')
-    err.status = 400
+    err.status = 401
     throw err
   }
   const auth = new google.auth.OAuth2()

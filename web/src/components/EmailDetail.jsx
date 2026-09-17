@@ -604,10 +604,11 @@ function AuthChip({ label, value }) {
 // Sender / email OSINT card - shown under the banner when an email is flagged.
 function EmailIntelCard({ intel }) {
   if (!intel) return null
-  const { sender, replyTo, returnPath, senderHeader, auth, sendingIp, geo, flags, spamScore, brandSpoof, senderDomainIntel } = intel
+  const { sender, replyTo, returnPath, senderHeader, auth, sendingIp, senderIp, senderGeo, providerIp, providerHost, providerGeo, geo, flags, spamScore, brandSpoof, senderDomainIntel } = intel
   const score = spamScore || 0
   const scoreWarn = score >= 4
-  const geoParts = geo ? [geo.city, geo.region, geo.country_name].filter(Boolean).join(', ') : null
+  const geoParts = (geo || senderGeo) ? [senderGeo?.city, senderGeo?.region, senderGeo?.country_name].filter(Boolean).join(', ') : null
+  const providerParts = providerGeo ? [providerGeo.city, providerGeo.region, providerGeo.country_name].filter(Boolean).join(', ') : null
   const senderWhois = senderDomainIntel?.whois
   return (
     <Box className="mt-3 mb-1 p-3 rounded-xl" sx={{ bgcolor: 'rgba(248,113,113,0.04)', border: '1px solid rgba(248,113,113,0.22)' }}>
@@ -680,14 +681,23 @@ function EmailIntelCard({ intel }) {
       </IntelSection>
 
       <IntelSection icon={LocationOnOutlined} title="Sending Origin">
-        {sendingIp && <IntelKeyValue label="Sending IP" value={sendingIp} mono />}
-        {geoParts && <IntelKeyValue label="Location" value={geoParts} />}
-        {geo?.country_code && <IntelKeyValue label="Country" value={`${geo.country_code}  (${geo.country_name || ''})`} />}
-        {geo?.connection?.isp && <IntelKeyValue label="ISP" value={geo.connection.isp} />}
-        {geo?.connection?.asn && <IntelKeyValue label="ASN" value={String(geo.connection.asn)} />}
-        {geo?.security?.proxy || geo?.security?.tor ? (
-          <IntelKeyValue label="Anonymizer" value={geo.security.proxy ? 'Proxy/VPN' : geo.security.tor ? 'Tor exit' : 'Yes'} warn />
+        {(senderIp || sendingIp) && <IntelKeyValue label="Sender IP" value={senderIp || sendingIp} mono />}
+        {geoParts && <IntelKeyValue label="Sender Location" value={geoParts} />}
+        {senderGeo?.country_code && <IntelKeyValue label="Country" value={`${senderGeo.country_code}  (${senderGeo.country_name || ''})`} />}
+        {senderGeo?.connection?.isp && <IntelKeyValue label="ISP" value={senderGeo.connection.isp} />}
+        {senderGeo?.connection?.asn && <IntelKeyValue label="ASN" value={String(senderGeo.connection.asn)} />}
+        {senderGeo?.security?.proxy || senderGeo?.security?.tor ? (
+          <IntelKeyValue label="Anonymizer" value={senderGeo.security.proxy ? 'Proxy/VPN' : senderGeo.security.tor ? 'Tor exit' : 'Yes'} warn />
         ) : null}
+        <Box sx={{ mt: 1, pt: 1, borderTop: '1px dashed rgba(148,163,184,0.25)' }} />
+        <Typography variant="caption" fontWeight={600} sx={{ color: '#94a3b8' }}>
+          Mail Service Provider
+        </Typography>
+        {providerIp && <IntelKeyValue label="Provider IP" value={providerIp} mono />}
+        {providerHost && <IntelKeyValue label="Provider Host" value={providerHost} mono />}
+        {providerParts && <IntelKeyValue label="Provider Location" value={providerParts} />}
+        {providerGeo?.connection?.isp && <IntelKeyValue label="Provider ISP" value={providerGeo.connection.isp} />}
+        {!providerIp && <IntelKeyValue label="Provider IP" value="Not available" />}
       </IntelSection>
 
       {senderDomainIntel && (

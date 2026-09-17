@@ -49,11 +49,12 @@ export default function EmailList({ selectedId, onSelect }) {
       firstRun.current = false
       load()
     }
+    if (error) return // don't keep hammering an invalid/denied token
     const interval = setInterval(() => {
       load()
     }, POLL_INTERVAL)
     return () => clearInterval(interval)
-  }, [load])
+  }, [load, error])
 
   const handleLoadMore = () => {
     setLoadingMore(true)
