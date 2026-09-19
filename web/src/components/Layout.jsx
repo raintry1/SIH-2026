@@ -11,7 +11,7 @@ import {
   ListItemIcon,
   Box,
 } from '@mui/material'
-import { ShieldOutlined, Logout, MailOutline } from '@mui/icons-material'
+import { ShieldOutlined, Logout } from '@mui/icons-material'
 import { logout } from '../auth/authService'
 
 export default function Layout({ user, children }) {

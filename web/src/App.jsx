@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { CircularProgress, Box } from '@mui/material'
 import { GoogleOAuthProvider } from '@react-oauth/google'
 import Login from './components/Login'
+import InstallPopup from './components/InstallPopup'
 import Dashboard from './pages/Dashboard'
 import { onAuthState } from './auth/authService'
 
@@ -32,6 +33,7 @@ export default function App() {
 
   return (
     <GoogleOAuthProvider clientId={import.meta.env.VITE_GMAIL_CLIENT_ID}>
+      <InstallPopup />
       <Routes>
         <Route
           path="/"
