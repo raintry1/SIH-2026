@@ -1,15 +1,62 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <defs>
-    <radialGradient id="bg" cx="0.5" cy="0.5" r="0.71">
-      <stop offset="0" stop-color="#4f46e5"/>
-      <stop offset="1" stop-color="#050312"/>
+    <radialGradient id="bg" cx="50%" cy="50%" r="65%">
+      <stop offset="0%" stop-color="#181c32"/>
+      <stop offset="100%" stop-color="#060813"/>
     </radialGradient>
-    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#6366f1"/>
-      <stop offset="1" stop-color="#d946ef"/>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="50%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#c084fc"/>
     </linearGradient>
+    <linearGradient id="mailGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e0e7ff"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
   </defs>
-  <rect width="100" height="100" rx="22" fill="url(#bg)"/>
-  <path d="M 50 16 C 58 16 66 19 72 23 L 72 44 C 72 64 62 81 50 87 C 38 81 28 64 28 44 L 28 23 C 34 19 42 16 50 16 Z" fill="url(#shield)"/>
-  <path d="M40 52 L48 60 L61 45" fill="none" stroke="#ffffff" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- App Icon Background -->
+  <rect width="100" height="100" rx="24" fill="url(#bg)"/>
+  <rect width="98" height="98" x="1" y="1" rx="23" fill="none" stroke="rgba(129, 140, 248, 0.3)" stroke-width="1.5"/>
+
+  <!-- Cyber Shield Outline -->
+  <path d="M 50 14 C 63 14 74 19 80 24 C 80 47 70 69 50 86 C 30 69 20 47 20 24 C 26 19 37 14 50 14 Z"
+        fill="rgba(99, 102, 241, 0.12)"
+        stroke="url(#shieldGrad)"
+        stroke-width="4.5"
+        stroke-linejoin="round"
+        filter="url(#glow)"/>
+
+  <!-- Inner Shield Accent Line -->
+  <path d="M 50 20 C 60 20 68 24 73 28 C 73 45 65 63 50 78 C 35 63 27 45 27 28 C 32 24 40 20 50 20 Z"
+        fill="none"
+        stroke="rgba(56, 189, 248, 0.35)"
+        stroke-width="1.5"/>
+
+  <!-- Minimalist Cyber Email Envelope -->
+  <rect x="33" y="38" width="34" height="25" rx="3.5"
+        fill="rgba(15, 23, 42, 0.8)"
+        stroke="url(#mailGrad)"
+        stroke-width="3" />
+  
+  <!-- Envelope Flap & Lines -->
+  <path d="M 34 40 L 50 52 L 66 40"
+        fill="none"
+        stroke="url(#mailGrad)"
+        stroke-width="3"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+  
+  <path d="M 35 61 L 44 51 M 65 61 L 56 51"
+        fill="none"
+        stroke="rgba(129, 140, 248, 0.6)"
+        stroke-width="2"
+        stroke-linecap="round"/>
+
+  <!-- Center Security Node Dot -->
+  <circle cx="50" cy="52" r="2.2" fill="#38bdf8" filter="url(#glow)"/>
 </svg>
